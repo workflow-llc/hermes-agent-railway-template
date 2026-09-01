@@ -9,10 +9,10 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on Railway u
 The Dockerfile is pinned to this official image:
 
 ```text
-nousresearch/hermes-agent:v2026.8.27@sha256:5f23552e16589d291099cd8041233e6200197d225e4b28b22a0463e732d4b843
+nousresearch/hermes-agent:v2026.8.31@sha256:87af7c6a5ee383834f75eb9a3fb509ccaacbab5d54084b086b48b84917e28efc
 ```
 
-`v2026.8.27` is Hermes Agent v0.20.6, a patch release rolling up the ~525 PRs merged since v0.20.5. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
+`v2026.8.31` is Hermes Agent v0.21.0, a major release that also rolls up the v0.20.1–v0.20.6 patch windows (~2,475 PRs merged since v0.20.0) — Bot Mode,cron memory+continuity, live subagent orchestration,and the MCP command center. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
 
 Use these service settings:
 
