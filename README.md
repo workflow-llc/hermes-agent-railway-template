@@ -53,6 +53,14 @@ The entrypoint maps `PORT` to `HERMES_DASHBOARD_PORT` at runtime.
 
 Provider credentials, messaging channels, models, skills, profiles, and gateway state are managed through the official dashboard and persisted under `/data/.hermes`.
 
+## Local patches
+
+`saga-patches/` holds operator patches applied on top of the pinned upstream image. They are copied into `/etc/cont-init.d/`, so they run as root on every container start, before any supervised service. Each one is idempotent, must exit 0 unconditionally (a non-zero cont-init script aborts the container), and verifies its own edit before touching the installed tree.
+
+| Patch | Purpose | Delete when |
+|---|---|---|
+| `slack-legacy-status.sh` | Forces the Slack adapter onto the legacy `assistant.threads.setStatus` / `setTitle` methods. Hermes v0.21.3 ships slack-sdk ≥ 3.44 and prefers `agents.sessions.setStatus`, but that endpoint only accepts the enum `active\|processing\|suspended\|closed`; Hermes sends free-form phrases ("is thinking..."), Slack answers `invalid_arguments`, the adapter swallows it, and the Slack thread indicator disappears. | Upstream stops sending free-form text to `agents.sessions.setStatus`, or Slack retires the legacy assistant API. |
+
 ## Upgrading Hermes
 
 Update the pinned release and digest in `Dockerfile` deliberately after reviewing the upstream [release notes](https://github.com/NousResearch/hermes-agent/releases) and validating the new image. Do not use `latest`. Because the template remains GitHub-backed, merging an upgrade to the default branch notifies existing template consumers.

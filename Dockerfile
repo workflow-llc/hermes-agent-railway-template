@@ -2,6 +2,13 @@ FROM nousresearch/hermes-agent:v2026.9.14@sha256:1f983df4d778d46b3c3892d7598c9d5
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 
+# Operator patch hook: s6 cont-init.d runs as root before any supervised service
+# starts. See saga-patches/slack-legacy-status.sh for what it does and why it can
+# be deleted (restores the Slack assistant thread-status indicator that Hermes
+# v0.21.3 drops by sending free-form text to agents.sessions.setStatus, which
+# only accepts active|processing|suspended|closed).
+COPY --chmod=0755 saga-patches/slack-legacy-status.sh /etc/cont-init.d/020-slack-legacy-status.sh
+
 ENV HERMES_HOME=/data/.hermes \
     HERMES_WRITE_SAFE_ROOT=/data/.hermes \
     HERMES_LAZY_INSTALL_TARGET=/data/.hermes/lazy-packages \
