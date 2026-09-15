@@ -1,4 +1,4 @@
-FROM nousresearch/hermes-agent:v2026.9.7@sha256:b3190406963c6b51ac955397ecef45346efaae9563ee305108f8eef0a77e267b
+FROM nousresearch/hermes-agent:v2026.9.14@sha256:1f983df4d778d46b3c3892d7598c9d57291430a6e35936ebc371ae1e5766699a
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 
