@@ -9,6 +9,13 @@ COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 # only accepts active|processing|suspended|closed).
 COPY --chmod=0755 saga-patches/slack-legacy-status.sh /etc/cont-init.d/020-slack-legacy-status.sh
 
+# Operator patch hook: restores the named-profile gateway slots that Hermes
+# v0.21.4's boot reconciler registers DOWN (while the root gateway refuses to
+# multiplex inside an s6 container), so the secondary profile's bot survives a
+# container restart. Also strips the `--replace` flag from the rendered s6 run
+# script, which the host-singleton guard refuses. See saga-patches/code-review-gateway.sh.
+COPY --chmod=0755 saga-patches/code-review-gateway.sh /etc/cont-init.d/021-code-review-gateway.sh
+
 ENV HERMES_HOME=/data/.hermes \
     HERMES_WRITE_SAFE_ROOT=/data/.hermes \
     HERMES_LAZY_INSTALL_TARGET=/data/.hermes/lazy-packages \

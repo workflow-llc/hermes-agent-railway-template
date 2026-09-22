@@ -60,6 +60,7 @@ Provider credentials, messaging channels, models, skills, profiles, and gateway 
 | Patch | Purpose | Delete when |
 |---|---|---|
 | `slack-legacy-status.sh` | Forces the Slack adapter onto the legacy `assistant.threads.setStatus` / `setTitle` methods. Hermes v0.21.3 ships slack-sdk ≥ 3.44 and prefers `agents.sessions.setStatus`, but that endpoint only accepts the enum `active\|processing\|suspended\|closed`; Hermes sends free-form phrases ("is thinking..."), Slack answers `invalid_arguments`, the adapter swallows it, and the Slack thread indicator disappears. | Upstream stops sending free-form text to `agents.sessions.setStatus`, or Slack retires the legacy assistant API. |
+| `code-review-gateway.sh` | Restores the named-profile gateway slots at boot. Hermes v0.21.4's `container_boot.reconcile_profile_gateways` registers every named slot DOWN (multiplex-only convergence) while the root gateway refuses to multiplex inside an s6 container (`gateway_migrate._host_supports_migration`), so nothing serves the secondary profile and its bot goes dark on every container restart. Also strips the `--replace` flag the rendered run script carries, which the host-singleton guard refuses (respawn storm). | Upstream's boot reconciler starts named slots again — i.e. `/data/.hermes/logs/container-boot.log` shows `action=started` for the profile on a fresh boot. |
 
 ## Upgrading Hermes
 
