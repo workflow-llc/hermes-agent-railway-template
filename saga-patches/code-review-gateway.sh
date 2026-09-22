@@ -60,6 +60,17 @@ for state in /data/.hermes/profiles/*/gateway_state.json; do
         sed -i 's/ gateway run --replace/ gateway run/g' "$svc/run" 2>/dev/null || true
         chmod 0755 "$svc/run" 2>/dev/null || true
     fi
+    # gh must be resolvable by the GATEWAY process: the webhook route's `deliver:
+    # github_comment` step shells out to `gh`, and the profile's binary lives in
+    # its home/bin, which is on the AGENT's login PATH (~/.profile) but not on the
+    # gateway's. Without this, PR reviews stop posting their summary comment while
+    # inline findings still land ("'gh' CLI not found" in gateway.log).
+    if [ -x "/data/.hermes/profiles/${prof}/home/bin/gh" ] \
+        && ! grep -qF "/data/.hermes/profiles/${prof}/home/bin" "$svc/run" 2>/dev/null; then
+        sed -i "\|^\. /opt/hermes/.venv/bin/activate|a export PATH=\"/data/.hermes/profiles/${prof}/home/bin:\$PATH\"" \
+            "$svc/run" 2>/dev/null || true
+        chmod 0755 "$svc/run" 2>/dev/null || true
+    fi
     rm -f "$svc/down" 2>/dev/null || true
 done
 
