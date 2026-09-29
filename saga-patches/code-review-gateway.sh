@@ -34,7 +34,59 @@
 #   "nothing happened", never "the container is down".
 # DELETE THIS PATCH once upstream starts the slots again (verify with
 #   /data/.hermes/logs/container-boot.log showing action=started for the profile).
+#
+# 2026-09-29: the premise above stopped holding. `gateway.multiplex_profiles: true` on the root
+#   config short-circuits the s6 preflight, so the root DOES multiplex now and the slots must stay
+#   down. This hook therefore branches on multiplex (see the code below): it registers the slot
+#   down instead of starting it, and puts each profile's home/bin on the ROOT slot's PATH (a
+#   mirrored route's `deliver: github_comment` shells out of the root process). Retire the whole
+#   file — and its COPY line in the Dockerfile — when a named slot is no longer a topology we
+#   might revert to.
 set -u
+
+# MULTIPLEX (2026-09-29): when the ROOT config sets gateway.multiplex_profiles: true the root
+# gateway serves every profile itself and named-profile slots must stay DOWN. Starting one prints
+# "The host gateway already serves profile '<name>' - nothing to start" and exits 75, which s6
+# treats as restart -> a ~5s respawn loop (~1,300 spawns/hour, most of a core each, +660 KB/h of
+# log). So under multiplex this hook does NOT clear the `down` marker; it writes it, and instead
+# makes sure the programs a MIRRORED route needs are on the ROOT slot's PATH.
+mux=0
+if grep -qE '^[[:space:]]*multiplex_profiles:[[:space:]]*true' /data/.hermes/config.yaml 2>/dev/null; then
+    mux=1
+elif command -v python3 >/dev/null 2>&1; then
+    mux=$(python3 -c "
+import glob, json
+for p in ['/data/.hermes/gateway_state.json'] + sorted(glob.glob('/data/.hermes/profiles/*/gateway_state.json')):
+    try:
+        d = json.load(open(p))
+    except Exception:
+        continue
+    if len(d.get('served_profiles') or []) > 1:
+        print(1); raise SystemExit
+print(0)" 2>/dev/null || echo 0)
+fi
+
+if [ "$mux" = "1" ]; then
+    echo "SAGA_CODE_REVIEW_SLOT_PATCH: multiplex is on - named slots stay down, root slot gets the profile PATHs"
+    root_run=/run/service/gateway-default/run
+    for state in /data/.hermes/profiles/*/gateway_state.json; do
+        [ -f "$state" ] || continue
+        prof=$(basename "$(dirname "$state")")
+        svc="/run/service/gateway-${prof}"
+        [ -d "$svc" ] || continue
+        # Registered down BY DESIGN: the marker stops s6-svscan from starting it.
+        touch "$svc/down" 2>/dev/null || true
+        # A mirrored route's `deliver: github_comment` shells out of the ROOT process, so the
+        # profile's gh (in its home/bin) has to be on the ROOT slot's PATH.
+        if [ -f "$root_run" ] && [ -x "/data/.hermes/profiles/${prof}/home/bin/gh" ] \
+            && ! grep -qF "/data/.hermes/profiles/${prof}/home/bin" "$root_run" 2>/dev/null; then
+            sed -i "\|^\. /opt/hermes/.venv/bin/activate|a export PATH=\"/data/.hermes/profiles/${prof}/home/bin:\$PATH\"" \
+                "$root_run" 2>/dev/null || true
+            chmod 0755 "$root_run" 2>/dev/null || true
+        fi
+    done
+    exit 0
+fi
 
 for state in /data/.hermes/profiles/*/gateway_state.json; do
     [ -f "$state" ] || continue
