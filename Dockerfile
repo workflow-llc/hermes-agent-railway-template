@@ -1,4 +1,7 @@
-FROM nousresearch/hermes-agent:v2026.9.24@sha256:2fd023efbb8d3d2b0ce1a73d028b07370cff34f567cfe0e999553e8c327ea283
+# `stable` is digest-pinned to the Hermes Agent v0.21.7 build (upstream tag
+# rc.15-v0.21.7, commit 71d34bad) — the new stable pipeline publishes this window
+# as `stable`/`latest` instead of a CalVer tag.
+FROM nousresearch/hermes-agent:stable@sha256:3140cc382d3f21a18019d28a1f89efb2af21ae9f86364895ccc019c7c7f8a446
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 
