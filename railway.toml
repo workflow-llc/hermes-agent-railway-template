@@ -5,5 +5,11 @@ dockerfilePath = "Dockerfile"
 [deploy]
 startCommand = "/usr/local/bin/hermes-railway-entrypoint gateway run"
 healthcheckPath = "/api/status"
+# Container boot (s6 stage2: UID check, volume chown, config seed, skills sync) runs
+# 3.5-5.3 min against a 73 GB /data volume. Railway's default health-check window is
+# 5m0s, so a slow boot used to fail the deploy outright — on 2026-10-16 the nightly
+# redeploy was marked FAILED after 11 attempts and left the service with no healthy
+# replica for 5h35m. Keep this well above the worst observed boot.
+healthcheckTimeout = 900
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

@@ -9,10 +9,12 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on Railway u
 The Dockerfile is pinned to this official image:
 
 ```text
-nousresearch/hermes-agent:stable@sha256:3140cc382d3f21a18019d28a1f89efb2af21ae9f86364895ccc019c7c7f8a446
+nousresearch/hermes-agent:v0.22.2@sha256:a11574b7fe8e1631d7d88d556677dac693bc058abf558cdeb899155688c1bf05
 ```
 
-`stable` (digest-pinned) is Hermes Agent v0.21.7, a patch release rolling up the ~204 PRs merged since v0.21.6. Upstream's new stable release pipeline publishes this window as the Docker `stable`/`latest` reference (built from tag `rc.15-v0.21.7`) instead of a CalVer tag such as `v2026.9.24`. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
+`v0.22.2` (digest-pinned) is Hermes Agent v0.22.2, a patch release; v0.22.1 was built from the wrong commit and shipped unreleased gateway work, and v0.22.0 was the "Threshold Release" (~24,200 commits since v0.21.0). The `v0.22.2` Docker tag is the same image the moving `stable`/`latest` references point at as of 2026-10-15, but the explicit tag is pinned so a `stable` re-point cannot move this service silently. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
+
+Note for upgrades: v0.22.2 fixes the gateway-after-reboot startup regression (#133744 — an early PID claimed by an unrelated process made a supervised gateway refuse to start).
 
 Use these service settings:
 
@@ -22,6 +24,7 @@ Use these service settings:
 | Volume mount | `/data` |
 | Public port | `8080` |
 | Health-check path | `/api/status` |
+| Health-check timeout | `900` s (`railway.toml`) |
 | Replicas | `1` |
 
 Railway continues building this GitHub repository so existing template consumers receive update notifications. The compatibility entrypoint only translates legacy environment variables, then executes the official image's `/init`; s6-overlay still supervises the Hermes gateway and dashboard.
@@ -60,7 +63,7 @@ Provider credentials, messaging channels, models, skills, profiles, and gateway 
 | Patch | Purpose | Delete when |
 |---|---|---|
 | `slack-legacy-status.sh` | Forces the Slack adapter onto the legacy `assistant.threads.setStatus` / `setTitle` methods. Hermes v0.21.3 ships slack-sdk ≥ 3.44 and prefers `agents.sessions.setStatus`, but that endpoint only accepts the enum `active\|processing\|suspended\|closed`; Hermes sends free-form phrases ("is thinking..."), Slack answers `invalid_arguments`, the adapter swallows it, and the Slack thread indicator disappears. | Upstream stops sending free-form text to `agents.sessions.setStatus`, or Slack retires the legacy assistant API. |
-| `code-review-gateway.sh` | Restores the named-profile gateway slots at boot. Hermes v0.21.4's `container_boot.reconcile_profile_gateways` registers every named slot DOWN (multiplex-only convergence) while the root gateway refuses to multiplex inside an s6 container (`gateway_migrate._host_supports_migration`), so nothing serves the secondary profile and its bot goes dark on every container restart. Also strips the `--replace` flag the rendered run script carries, which the host-singleton guard refuses (respawn storm). | Upstream's boot reconciler starts named slots again — i.e. `/data/.hermes/logs/container-boot.log` shows `action=started` for the profile on a fresh boot. |
+| `code-review-gateway.sh` | Restores the named-profile gateway slots at boot. Hermes v0.21.4's `container_boot.reconcile_profile_gateways` registers every named slot DOWN (multiplex-only convergence) while the root gateway refuses to multiplex inside an s6 container (`gateway_migrate._host_supports_migration`), so nothing serves the secondary profile and its bot goes dark on every container restart. Also strips the `--replace` flag the rendered run script carries, which the host-singleton guard refuses (respawn storm). Under multiplex `(gateway.multiplex_profiles: true` on this host's root config) the hook only keeps the slots parked down and injects the profile `home/bin` onto the root slot's `PATH`. | Upstream's boot reconciler starts named slots again — i.e. `/data/.hermes/logs/container-boot.log` shows `action=started` for the profile on a fresh boot — or the root slot's rendered run script stops needing the profile `PATH` injection. |
 
 ## Upgrading Hermes
 
