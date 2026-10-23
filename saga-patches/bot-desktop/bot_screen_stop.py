@@ -25,6 +25,7 @@ Exit codes:
     0  browser (if any) closed and the screen stopped; prints pids before/after
     2  refused: a human holds the lease (hand back first)
     3  screen still running after the stop attempt
+    4  cleanup failed: the browser survived, or runtime.stop() raised (see `error`)
 """
 from __future__ import annotations
 
@@ -213,6 +214,15 @@ def main() -> int:
         print(json.dumps({"stopped": False, "reason": msg}) if as_json else msg)
         return 2
 
+    # Refusal is a transition, not a read: `release(unless_human=True)` decides under the lease
+    # file lock (the same idiom `display.stop` uses) and returns the resulting lease, so a takeover
+    # that landed after the check above cannot have its browser killed under it. Re-checked here,
+    # microseconds before the destructive part instead of 12 s earlier.
+    if lease.release(unless_human=True).holder == lease.HUMAN:
+        msg = "refused: a human holds the Bot Desktop lease — hand back first, then stop"
+        print(json.dumps({"stopped": False, "reason": msg}) if as_json else msg)
+        return 2
+
     before = cgroup_pids()
     browser_result = stop_browser()
     lock_cleared = clear_scratch_lock()
@@ -243,6 +253,10 @@ def main() -> int:
         print(f"screen running={st.get('running')} stopped={out['screen_stopped']}"
               + (f" error={error}" if error else ""))
         print(f"pids {before} -> {after} (delta {out['pids_delta']})")
+    browser_ok = (browser_result.get("closed")
+                  or browser_result.get("reason") == "no Chromium on this profile")
+    if error or not browser_ok:
+        return 4  # cleanup failed: a surviving Chromium must not read as success
     if keep_screen:
         return 0
     return 0 if out["screen_stopped"] else 3

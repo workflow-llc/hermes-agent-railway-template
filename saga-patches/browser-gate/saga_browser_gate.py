@@ -128,9 +128,20 @@ def _shared_profile_port() -> int | None:
 
 
 def _held_lock() -> dict | None:
+    path = _lock_path()
     try:
-        data = json.loads(_lock_path().read_text())
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
     except (OSError, ValueError):
+        # An unparsable lock is not automatically stale: a winner that has created the file but
+        # whose payload we cannot read yet is a live reservation, and unlinking it would let us
+        # both launch. Age decides — seconds old means busy, older means the writer died.
+        try:
+            if time.time() - path.stat().st_mtime < 5:
+                return {"pid": 0, "started": "just created"}
+        except OSError:
+            return None
         return None
     if isinstance(data, dict) and _pid_alive(int(data.get("pid") or 0)):
         return data
@@ -203,8 +214,13 @@ def _reserve() -> str | None:
     except OSError:
         return None
     for _ in range(3):
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            tmp.write_text(payload)
+            # Content and name in ONE step: EEXIST now means another launcher won, never "the file
+            # exists but is still empty", which _held_lock() would read as a stale lock and unlink
+            # under the winner's feet.
+            os.link(tmp, path)
         except FileExistsError:
             held = _held_lock()
             if held is None:
@@ -221,8 +237,11 @@ def _reserve() -> str | None:
                 "[override: SAGA_BROWSER_GATE=off]") from None
         except OSError:
             return None
-        with os.fdopen(fd, "w") as fh:
-            fh.write(payload)
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         return token
     raise BrowserLaunchRefused(
         "Bot Desktop browser gate (busy): the shared lock could not be taken "
