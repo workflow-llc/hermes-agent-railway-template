@@ -3098,6 +3098,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendUdpUpgrade() {
+        // BRIDGE-SAFE: 181 is KasmVNC's WebRTC/UDP transit message, sent unconditionally 3 s after
+        // connect. The gateway's RFB gate refuses unknown types, so the viewer was being dropped
+        // ~3 s into a healthy stream. TCP RFB through the socket bridge is the only transport here.
+        return;
         if (this._transitConnectionState == this.TransitConnectionStates.Upgrading) {
             return;
         }
@@ -3129,6 +3133,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendUdpDowngrade() {
+        // BRIDGE-SAFE: 181 again (see _sendUdpUpgrade).
+        return;
         this._changeTransitConnectionState(this.TransitConnectionStates.Downgrading);
         const buff = this._sock._sQ;
         const offset = this._sock._sQlen;
@@ -3855,8 +3861,10 @@ RFB.messages = {
     },
 
     sendBinaryClipboard(sock, dataset, mimes) {
+        // BRIDGE-SAFE: 180 is KasmVNC-only; the gateway's RFB gate closes on unknown types.
+        // Plain-text clipboard still goes out as ClientCutText (type 6), which the gate knows.
+        return;
 
-        
         const buff = sock._sQ;
         let offset = sock._sQlen;
 
@@ -3946,6 +3954,13 @@ RFB.messages = {
     },
 
     setMaxVideoResolution(sock, width, height) {
+        // BRIDGE-SAFE: message type 252 is a KasmVNC extension. The gateway's RfbClientFilter
+        // (tools/bot_desktop/rfb_filter.py) implements RFC 6143 plus TigerVNC's 150/248/251/255 and
+        // closes the socket with 1003 "unknown RFB client message type 252" — which killed the
+        // viewer on the first framebuffer update. The cap is a Kasm-only rendering hint; the
+        // server's own size (-geometry 1440x900) is what applies here.
+        return;
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -3987,6 +4002,9 @@ RFB.messages = {
     },
 
     requestStats(sock) {
+        // BRIDGE-SAFE: 178 is KasmVNC-only; the gateway's RFB gate closes on unknown types.
+        return;
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -4003,6 +4021,9 @@ RFB.messages = {
     },
 
     sendFrameStats(sock, allMs, renderMs) {
+        // BRIDGE-SAFE: 179 is KasmVNC-only; the gateway's RFB gate closes on unknown types.
+        return;
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -4149,6 +4170,9 @@ RFB.messages = {
     },
 
     xvpOp(sock, ver, op) {
+        // BRIDGE-SAFE: 250 is XVP, which the gateway's RFB gate does not implement (it would close
+        // the stream). Reboot/shutdown of the bot's VM is not a viewer action anyway.
+        return;
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
