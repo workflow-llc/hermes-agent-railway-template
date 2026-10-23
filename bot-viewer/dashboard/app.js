@@ -156,49 +156,56 @@ function connectRfb(obs) {
   const url = new URL(`${scheme}//${location.host}${obs.path}`);
   url.searchParams.set('display_ticket', obs.ticket);
 
-  if (rfb) {
+  // Build the replacement BEFORE tearing the old one down: the superseded instance's disconnect
+  // handler then sees `rfb !== self` and stays quiet, instead of reporting "screen stopped" and
+  // un-hiding Start on the fresh stream.
+  const previous = rfb;
+  // Both sockets are same-origin and the bridge accepts without a subprotocol, so `wsProtocols: []`
+  // is deliberate: requesting `binary` would fail the handshake.
+  const self = new RFB(screenEl, keyboardInput(), url.toString(), { shared: true, wsProtocols: [] });
+  rfb = self;
+  if (previous) {
     try {
-      rfb.disconnect();
+      previous.disconnect();
     } catch {
       /* already gone */
     }
   }
-  // Both sockets are same-origin and the bridge accepts without a subprotocol, so `wsProtocols: []`
-  // is deliberate: requesting `binary` would fail the handshake.
-  rfb = new RFB(screenEl, keyboardInput(), url.toString(), { shared: true, wsProtocols: [] });
-  rfb.viewOnly = true; // watch-only until Take over, and the bridge enforces it server-side
-  rfb.scaleViewport = true;
-  rfb.resizeSession = false;
-  rfb.background = '#0b0d10';
+  self.viewOnly = true; // watch-only until Take over, and the bridge enforces it server-side
+  self.scaleViewport = true;
+  self.resizeSession = false;
+  self.background = '#0b0d10';
   say('connecting to the screen…');
   setMode();
 
-  rfb.addEventListener('connect', () => {
+  self.addEventListener('connect', () => {
+    if (rfb !== self) return;
     retries = 0;
     say(holding ? 'connected — you have control' : 'watching (view only)', 'ok');
     setMode();
   });
-  rfb.addEventListener('disconnect', (e) => {
+  self.addEventListener('disconnect', (e) => {
+    if (rfb !== self) return; // a superseded instance closing: not this page's state
     const code = e.detail && e.detail.code;
     holding = false;
     rfb = null;
     setMode();
     if (code === 4000) {
       say('someone else took control — back to view only, reconnecting…', 'warn');
-    } else if (code === 4001) {
-      // Stopped on purpose: the idle timer (`bot_desktop.idle_stop_minutes`) or a task's
-      // bot_screen_stop.py. Reconnecting here restarted the desktop two seconds later, so a tab
-      // left open — including a backgrounded or sleeping one — defeated the idle stop and kept
-      // Xvnc (and its memory) alive indefinitely. Hand the decision back to the human instead:
-      // "Screen stopped" plus a Start button. Start-on-page-load is unchanged.
+    } else if (code === 4001 || code === 1000) {
+      // Stopped on purpose: 4001 is the bridge's "screen is gone", 1000 is the teardown a stop
+      // under an attached viewer produces (`bot_screen_stop.py`, or the idle timer). Reconnecting
+      // here restarted the desktop two seconds later, so a tab left open — including a backgrounded
+      // or sleeping one — defeated `idle_stop_minutes` and kept Xvnc alive. Hand the decision back:
+      // "screen stopped" plus a Start button. Start-on-page-load is unchanged.
       say('screen stopped — press Start screen to watch again', 'warn');
       $('start').hidden = false;
       return;
     } else {
       say('stream ended — reconnecting…', 'warn');
     }
-    // Other closes are retried through observe(), which starts the screen again if it is down; the
-    // cap stops an endless restart loop when the desktop cannot come up at all. 4001 returned above.
+    // Network drops and evictions are retried through observe(), which starts the screen again if
+    // it is down; the cap stops an endless restart loop when the desktop cannot come up at all.
     retries += 1;
     if (retries > MAX_RETRIES) {
       say('the screen keeps dropping — press Start screen to retry', 'err');

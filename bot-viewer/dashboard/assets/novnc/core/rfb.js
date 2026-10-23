@@ -292,6 +292,11 @@ export default class RFB extends EventTargetMixin {
             }
         });
         this._sock.on('close', (e) => {
+            // BRIDGE-SAFE (SAGA): the bridge distinguishes a deliberate stop (4001, or a bare
+            // 1000 when the gateway tears down under an attached viewer), an eviction (4000) and a
+            // network drop (1006) purely by this code. It used to reach only a log string, so a
+            // caller could not tell them apart; carry it into the disconnect event below.
+            this._lastCloseCode = (e && e.code) || 1006;
             Log.Debug("WebSocket on-close event");
             let msg = "";
             if (e.code) {
@@ -1462,7 +1467,8 @@ export default class RFB extends EventTargetMixin {
             case 'disconnected':
                 this.dispatchEvent(new CustomEvent(
                     "disconnect", { detail:
-                                    { clean: this._rfbCleanDisconnect } }));
+                                    { clean: this._rfbCleanDisconnect,
+                                      code: this._lastCloseCode } }));
                 break;
         }
     }
@@ -3861,8 +3867,30 @@ RFB.messages = {
     },
 
     sendBinaryClipboard(sock, dataset, mimes) {
-        // BRIDGE-SAFE: 180 is KasmVNC-only; the gateway's RFB gate closes on unknown types.
-        // Plain-text clipboard still goes out as ClientCutText (type 6), which the gate knows.
+        // BRIDGE-SAFE (SAGA): 180 is KasmVNC-only and the gateway's RFB gate closes on it.
+        // This fork routes EVERY clipboard write through here (`clipboardPasteFrom`,
+        // `clipboardPasteDataFrom`) and has no ClientCutText writer of its own, so plain text —
+        // the password / 2FA paste a human needs while holding the lease — is framed as RFC 6143
+        // type 6 right here, then the binary path below stays off.
+        const textIndex = mimes ? mimes.indexOf('text/plain') : -1;
+        const text = textIndex === -1 ? null : dataset[textIndex];
+        if (text && text.length) {
+            const buff = sock._sQ;
+            const offset = sock._sQlen;
+            if (offset + 8 + text.length <= buff.length) {
+                buff[offset] = 6;  // ClientCutText
+                buff[offset + 1] = 0;
+                buff[offset + 2] = 0;
+                buff[offset + 3] = 0;
+                new DataView(buff.buffer, buff.byteOffset, buff.byteLength)
+                    .setUint32(offset + 4, text.length);  // big-endian by default
+                buff.set(text, offset + 8);
+                sock._sQlen += 8 + text.length;
+                sock.flush();
+            } else {
+                Log.Warn("Clipboard paste skipped: " + text.length + " bytes does not fit the send queue");
+            }
+        }
         return;
 
         const buff = sock._sQ;

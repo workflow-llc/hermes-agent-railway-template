@@ -57,7 +57,16 @@ try:
         raw = shlex.split(raw)  # a flag list written as one string, not one flag per character
     elif not isinstance(raw, (list, tuple)):
         raise TypeError(f"chromium_args must be a list or a string, got {type(raw).__name__}")
-    extra = [str(a) for a in raw]
+    parsed = [str(a) for a in raw]
+    # AGENT_BROWSER_ARGS is a comma-separated list (upstream splits on ","), so a flag that itself
+    # contains a comma — `--window-size=1280,720`, `--disable-features=A,B` — would arrive at
+    # Chromium as two argv entries. Refuse it loudly instead of launching something nobody asked
+    # for; `extra` is only assigned after the check, so the fallback really is the base flags.
+    for arg in parsed:
+        if "," in arg:
+            raise ValueError(f"chromium_args item contains a comma, which AGENT_BROWSER_ARGS "
+                             f"cannot carry through to Chromium: {arg!r}")
+    extra = parsed
 except Exception as exc:  # noqa: BLE001 - boot must not fail over a flag list
     print(f"bot-desktop chromium flags: could not read browser.chromium_args ({exc}); "
           "using sandbox-bypass flags only", file=sys.stderr)
@@ -71,6 +80,14 @@ PY_CONFIG
 )"
     export AGENT_BROWSER_ARGS
     echo "bot-desktop chromium flags: $AGENT_BROWSER_ARGS"
+else
+    # A caller-set value must not remove the flags this container needs to start Chromium at all:
+    # tools/browser_tool_session.py adds --no-sandbox/--disable-dev-shm-usage only when the variable
+    # is ABSENT, so inheriting a caller value would launch Chromium as uid 10000 with the sandbox on
+    # ("No usable sandbox!") and nothing would point back to this variable. Merge, don't skip.
+    AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage,$AGENT_BROWSER_ARGS"
+    export AGENT_BROWSER_ARGS
+    echo "bot-desktop chromium flags (merged with caller value): $AGENT_BROWSER_ARGS"
 fi
 
 exec /opt/hermes/docker/entrypoint-dispatch.sh "$@"
