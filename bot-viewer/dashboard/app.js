@@ -13,6 +13,8 @@ import RFB from './assets/novnc/core/rfb.js';
 
 const $ = (id) => document.getElementById(id);
 const screenEl = $('screen');
+// Kasm's RFB wants a touch-input element; a detached node keeps its gesture handlers off the page.
+const touchEl = document.createElement('div');
 
 let gw = null;
 let nextId = 0;
@@ -133,7 +135,10 @@ function connectRfb(obs) {
       /* already gone */
     }
   }
-  rfb = new RFB(screenEl, url.toString(), { shared: true, wsProtocols: [] });
+  // The vendored noVNC is Kasm's fork: (target, touchInput, urlOrChannel, options),
+  // not upstream noVNC 1.3's (target, url, options). Passing the URL second made the
+  // constructor treat the string as the touch element and throw.
+  rfb = new RFB(screenEl, touchEl, url.toString(), { shared: true, wsProtocols: ['binary'] });
   rfb.viewOnly = true; // watch-only until Take over, and the bridge enforces it server-side
   rfb.scaleViewport = true;
   rfb.resizeSession = false;
@@ -168,13 +173,31 @@ function fail(err) {
 }
 
 async function observe() {
-  const obs = await rpc('display.observe', {});
+  let obs = await rpc('display.observe', {});
   viewerId = obs.viewer_id;
   if (!obs.running) {
-    say('the bot screen is not running', 'warn');
+    // Opening the viewer IS the request for a screen: start it and wait, rather than showing a
+    // dead button nobody presses. display.start is idempotent, and the idle-stop timer re-arms.
     $('start').hidden = false;
-    setMode();
-    return;
+    say('starting the bot screen…');
+    try {
+      await rpc('display.start', {});
+    } catch (err) {
+      say('could not start the screen', 'warn');
+      setMode();
+      return;
+    }
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      obs = await rpc('display.observe', {});
+      viewerId = obs.viewer_id;
+      if (obs.running) break;
+    }
+    if (!obs.running) {
+      say('the screen did not come up — press Start to retry', 'warn');
+      setMode();
+      return;
+    }
   }
   $('start').hidden = true;
   connectRfb(obs);
