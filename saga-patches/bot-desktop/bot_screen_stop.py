@@ -51,66 +51,128 @@ def cgroup_pids() -> int | None:
     return _read_int("/sys/fs/cgroup/pids.current")
 
 
-def chrome_pids() -> list[int]:
-    """Pids of Chromium processes belonging to this profile's Bot Desktop screen."""
-    profile = str(browser.profile_dir())
-    found: list[int] = []
+def _snapshot() -> dict[int, tuple[int, tuple[str, ...]]]:
+    """pid -> (ppid, argv) for every process this uid can see."""
+    procs: dict[int, tuple[int, tuple[str, ...]]] = {}
     for entry in Path("/proc").iterdir():
         if not entry.name.isdigit():
             continue
+        pid = int(entry.name)
         try:
-            cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+            # `stat` is `pid (comm) state ppid ...`; comm may contain spaces and parentheses.
+            stat = (entry / "stat").read_text()
+            ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        try:
+            argv = tuple(a.decode("utf-8", "replace")
+                         for a in (entry / "cmdline").read_bytes().split(b"\0") if a)
         except OSError:
             continue
-        if "chrom" not in cmdline.lower():
-            continue
-        if profile in cmdline or "chrome-linux64/chrome" in cmdline:
-            found.append(int(entry.name))
-    return found
+        procs[pid] = (ppid, argv)
+    return procs
+
+
+def _names_profile(argv: tuple[str, ...], profile: str) -> bool:
+    """True when this argv names exactly this profile as its Chromium user-data-dir."""
+    wanted = f"--user-data-dir={profile.rstrip('/')}"
+    return any(arg.rstrip("/") == wanted for arg in argv)
+
+
+def _is_chromium(argv: tuple[str, ...]) -> bool:
+    return "chrom" in " ".join(argv).lower()
+
+
+def chrome_pids() -> list[int]:
+    """Pids of the Bot Desktop browser tree, and nothing else.
+
+    Roots are the processes whose argv names THIS profile (`--user-data-dir=<profile>`); its
+    renderer/zygote/utility children are reached by walking ppid down from those roots. The shared
+    bundle path (`chrome-linux64/chrome`) is deliberately NOT matched: `PLAYWRIGHT_BROWSERS_PATH`
+    makes every Playwright Chromium in this container use that same binary, so matching it would
+    SIGTERM/SIGKILL another task's headless browser, the Meet bot or `hermes doctor --live`.
+    """
+    profile = str(browser.profile_dir())
+    procs = _snapshot()
+    roots = {pid for pid, (_ppid, argv) in procs.items()
+             if _names_profile(argv, profile) and _is_chromium(argv)}
+    if not roots:
+        return []
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, _argv) in procs.items():
+        children.setdefault(ppid, []).append(pid)
+    tree = set(roots)
+    stack = list(roots)
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child not in tree:
+                tree.add(child)
+                stack.append(child)
+    return sorted(tree)
+
+
+def _alive(pids: list[int] | set[int]) -> list[int]:
+    """Subset of `pids` that still exists AND still looks like a Chromium process.
+
+    The argv re-check keeps a recycled pid (reaped while we waited) out of the SIGKILL pass.
+    """
+    procs = _snapshot()
+    return sorted(pid for pid in pids
+                  if pid in procs and _is_chromium(procs[pid][1]))
 
 
 def _port_holder() -> int | None:
-    """pid Chromium advertises for the shared profile (SingletonLock -> host-pid), if alive."""
+    """pid Chromium advertises for the shared profile (SingletonLock -> host-pid), if it is ours.
+
+    SingletonLock outlives a crashed browser and its pid can be recycled by any later process, so
+    the pid must be alive *and* still carry this profile's `--user-data-dir`.
+    """
     profile = Path(str(browser.profile_dir()))
     try:
         target = os.readlink(profile / "SingletonLock")
         pid = int(target.rpartition("-")[2])
     except (OSError, ValueError):
         return None
-    try:
-        os.kill(pid, 0)
-    except OSError:
+    procs = _snapshot()
+    if pid not in procs:
+        return None
+    _ppid, argv = procs[pid]
+    if not (_is_chromium(argv) and _names_profile(argv, str(profile))):
         return None
     return pid
 
 
 def stop_browser(timeout: float = 12.0) -> dict:
-    pids = chrome_pids()
+    tree = chrome_pids()
     holder = _port_holder()
-    if holder and holder not in pids:
-        pids.append(holder)
-    if not pids:
+    if holder and holder not in tree:
+        tree.append(holder)
+    if not tree:
         return {"closed": False, "killed": [], "reason": "no Chromium on this profile"}
-    for pid in pids:
+    # Signal the whole recorded tree, not a fresh scan: once the root exits its children are
+    # reparented to init and a second scan can no longer attribute them to this profile.
+    for pid in tree:
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
     deadline = time.time() + timeout
-    while time.time() < deadline and chrome_pids():
+    while time.time() < deadline and _alive(tree):
         time.sleep(0.5)
     killed = []
-    for pid in chrome_pids():
+    for pid in _alive(tree):
         try:
             os.kill(pid, signal.SIGKILL)
             killed.append(pid)
         except OSError:
             pass
+    if killed:
+        time.sleep(0.5)
     # Chromium's singleton files outlive a SIGKILL and would make the next launch think a browser
     # is up: clear them from the profile once nothing is left running.
     leftovers = []
     profile = Path(str(browser.profile_dir()))
-    if not chrome_pids():
+    if not _alive(tree):
         for name in ("SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort"):
             try:
                 (profile / name).unlink()
@@ -118,8 +180,8 @@ def stop_browser(timeout: float = 12.0) -> dict:
                 pass
             except OSError as exc:
                 leftovers.append(f"{name}: {exc}")
-    return {"closed": not chrome_pids(), "killed": killed, "leftovers": leftovers,
-            "pids_signalled": pids}
+    return {"closed": not _alive(tree), "killed": killed, "leftovers": leftovers,
+            "pids_signalled": tree}
 
 
 def clear_scratch_lock() -> bool:

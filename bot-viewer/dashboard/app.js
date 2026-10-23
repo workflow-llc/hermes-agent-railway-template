@@ -186,19 +186,26 @@ function connectRfb(obs) {
     if (code === 4000) {
       say('someone else took control — back to view only, reconnecting…', 'warn');
     } else if (code === 4001) {
-      say('the bot screen stopped — starting it again…', 'warn');
+      // Stopped on purpose: the idle timer (`bot_desktop.idle_stop_minutes`) or a task's
+      // bot_screen_stop.py. Reconnecting here restarted the desktop two seconds later, so a tab
+      // left open — including a backgrounded or sleeping one — defeated the idle stop and kept
+      // Xvnc (and its memory) alive indefinitely. Hand the decision back to the human instead:
+      // "Screen stopped" plus a Start button. Start-on-page-load is unchanged.
+      say('screen stopped — press Start screen to watch again', 'warn');
+      $('start').hidden = false;
+      return;
     } else {
       say('stream ended — reconnecting…', 'warn');
     }
-    // Every close is retried through observe(), which starts the screen again if it is down; the
-    // cap stops an endless restart loop when the desktop cannot come up at all.
+    // Other closes are retried through observe(), which starts the screen again if it is down; the
+    // cap stops an endless restart loop when the desktop cannot come up at all. 4001 returned above.
     retries += 1;
     if (retries > MAX_RETRIES) {
       say('the screen keeps dropping — press Start screen to retry', 'err');
       $('start').hidden = false;
       return;
     }
-    setTimeout(() => observe().catch(fail), code === 4001 ? 2000 : 1500);
+    setTimeout(() => observe().catch(fail), 1500);
   });
 }
 

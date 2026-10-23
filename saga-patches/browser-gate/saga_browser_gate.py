@@ -20,9 +20,16 @@ allowed:
 
   * a headed browser already open on the shared Bot Desktop profile -> REFUSE and tell the
     caller to attach (`connect_over_cdp`) to the live one, never start a second tree;
-  * another gate-registered browser is still alive -> REFUSE (single global tree);
+  * another gate-registered headed tree is still alive -> REFUSE (single global tree);
   * pids headroom below the reserve -> REFUSE (queue the work; a failed fork inside Hermes
     looks like an agent bug, not a capacity problem).
+
+The one-session rule is about the *headed* Bot Desktop browser: `headless=True` launches skip the
+reuse and single-tree verdicts (a headless tree has its own profile and cannot be pointed at the
+window on screen) and are admitted on the pid budget alone. That keeps the shipped headless callers
+— `hermes_cli/doctor_live.py`, `plugins/google_meet/meet_bot.py` — working. A
+`launch_persistent_context` aimed at the Bot Desktop profile is treated as headed even with
+`headless=True`, because it is trying to become the desktop's tree.
 
 An allowed launch registers itself in `bot-desktop/scratch-browser.lock` and clears the lock
 when the browser disconnects, so the gate sees trees that Chromium's own singleton cannot.
@@ -46,6 +53,7 @@ import os
 import socket
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # Measured on this host (DEVS-1068): a headed Chromium at about:blank is 114 threads with the slim
@@ -129,19 +137,28 @@ def _held_lock() -> dict | None:
     return None
 
 
-def decide() -> tuple[str, str]:
-    """(verdict, reason) for a browser launch starting right now."""
+def decide(*, headless: bool = False) -> tuple[str, str]:
+    """(verdict, reason) for a browser launch starting right now.
+
+    `headless` is not a loophole, it is a different question. Two shipped callers inside the image
+    launch headless on purpose — `hermes_cli/doctor_live.py:72` (the doctor's live check) and
+    `plugins/google_meet/meet_bot.py:476` (the Meet bot's default path) — and neither can "attach
+    to the window that is on screen". A headless launch is its own tree with its own profile, so it
+    never reuses the desktop's window; it only has to fit the pid budget.
+    """
     if (os.environ.get("SAGA_BROWSER_GATE", "") or "").strip().lower() in ("off", "0", "false", "no"):
         return _OFF, "SAGA_BROWSER_GATE is off in this process — launch not gated"
 
-    port = _shared_profile_port()
+    # A headless tree cannot be pointed at the headed desktop's window, so the reuse and
+    # single-tree verdicts do not apply to it; the budget check below still does.
+    port = None if headless else _shared_profile_port()
     if port:
         return _REUSE, (
             f"a headed browser is already open on the Bot Desktop profile (DevTools :{port}). Do not "
             f"launch a second tree: attach with playwright.chromium.connect_over_cdp('http://127.0.0.1:{port}') "
             "and reuse the window that is on screen, or wait for the open session to finish.")
 
-    held = _held_lock()
+    held = None if headless else _held_lock()
     if held:
         return _BUSY, (
             f"another gated browser is alive (pid {held.get('pid')}, started {held.get('started')}) — this "
@@ -155,39 +172,121 @@ def decide() -> tuple[str, str]:
             f"~{BROWSER_THREAD_ESTIMATE}. Queue this task and re-run when the fleet is quieter; do not "
             "raise the Railway plan without asking.")
 
+    if headless:
+        return _ALLOW, f"headless launch fits the pid budget ({current}/{cap})"
     return _ALLOW, "no browser open and there is pid headroom for one tree"
-
-
-def _register(browser) -> None:
-    """Record this tree so a second gated launch is refused, and clear it on disconnect."""
-    path = _lock_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"pid": os.getpid(),
-                                    "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                    "argv": sys.argv[:1]}))
-    except OSError:
-        return
-
-    def _release(*_a) -> None:
-        try:
-            data = json.loads(path.read_text())
-            if int(data.get("pid") or 0) == os.getpid():
-                path.unlink()
-        except (OSError, ValueError):
-            pass
-
-    try:
-        browser.on("disconnected", _release)
-    except Exception:  # noqa: BLE001 - async browsers take a listener, not on()
-        try:
-            browser.on("disconnect", _release)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 class BrowserLaunchRefused(RuntimeError):
     """Raised instead of starting a second Chromium tree."""
+
+
+def _reserve() -> str | None:
+    """Take the gate lock atomically; return its token (None: the lock file is unusable).
+
+    `decide()` followed by a plain `write_text()` was two steps with no lock, so two launchers
+    landing at the same instant both saw ALLOW, both started a tree and the second silently
+    overwrote the first's record — the exact concurrency this gate exists for. `O_CREAT|O_EXCL`
+    makes the reservation itself the decision: one launcher creates the file, the loser gets
+    EEXIST and is refused *before* it launches. A lock whose owner is dead is stale and is taken
+    over, so a crash mid-flight does not wedge the gate.
+    """
+    path = _lock_path()
+    token = uuid.uuid4().hex
+    payload = json.dumps({"pid": os.getpid(),
+                          "token": token,
+                          "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                          "argv": sys.argv[:1],
+                          "cmdline": " ".join(sys.argv)[:400]})
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    for _ in range(3):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            held = _held_lock()
+            if held is None:
+                # Owner is gone (crashed, SIGKILLed): take the stale lock over instead of wedging.
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
+            raise BrowserLaunchRefused(
+                "Bot Desktop browser gate (busy): another launch registered the shared lock first "
+                f"(pid {held.get('pid')}, started {held.get('started')}) — this container runs ONE "
+                "browser tree at a time. Queue this work, or close that browser first. "
+                "[override: SAGA_BROWSER_GATE=off]") from None
+        except OSError:
+            return None
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+        return token
+    raise BrowserLaunchRefused(
+        "Bot Desktop browser gate (busy): the shared lock could not be taken "
+        "[override: SAGA_BROWSER_GATE=off]")
+
+
+def _release(token: str | None) -> None:
+    """Drop the lock only if it is still ours — a later tree's record must survive our exit."""
+    if not token:
+        return
+    path = _lock_path()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or data.get("token") != token:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _attach_release(browser, token: str) -> None:
+    """Clear our reservation when the tree we registered actually disconnects."""
+
+    def _release_on_disconnect(*_a) -> None:
+        _release(token)
+
+    for event in ("disconnected", "disconnect"):
+        try:
+            browser.on(event, _release_on_disconnect)
+            return
+        except Exception:  # noqa: BLE001 - async browsers take a listener, not on()
+            continue
+
+
+def _shared_persistent_target(args, kwargs) -> bool:
+    """True when launch_persistent_context is aimed at the Bot Desktop profile itself."""
+    raw = kwargs.get("user_data_dir")
+    if raw is None and args:
+        raw = args[0]
+    if not raw:
+        return False
+    try:
+        candidate = Path(os.path.expanduser(str(raw)))
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        return candidate.resolve() == _profile_dir().resolve()
+    except OSError:
+        return False
+
+
+def _admit(args, kwargs, *, persistent: bool) -> tuple[str, str, bool]:
+    """(verdict, reason, strict).
+
+    strict = a headed tree, or a persistent context on the Bot Desktop profile: the cases where
+    "reuse the window that is on screen" is a real remedy, so they also take the single-tree lock.
+    A plainly headless launch is admitted on the pid budget alone.
+    """
+    headless = bool(kwargs.get("headless", True))  # Playwright's own default is headless
+    strict = (not headless) or (persistent and _shared_persistent_target(args, kwargs))
+    verdict, reason = decide(headless=not strict)
+    return verdict, reason, strict
 
 
 def _refuse(verdict: str, reason: str) -> None:
@@ -209,27 +308,39 @@ def install() -> bool:
     except Exception:  # noqa: BLE001 - no Playwright in this interpreter
         return False
 
-    def _wrap_sync(orig):
+    def _wrap_sync(orig, persistent):
         def launch(self, *args, **kwargs):
-            verdict, reason = decide()
+            verdict, reason, strict = _admit(args, kwargs, persistent=persistent)
             if verdict not in (_ALLOW, _OFF):
                 _refuse(verdict, reason)
-            result = orig(self, *args, **kwargs)
+            token = _reserve() if (strict and verdict == _ALLOW) else None
+            try:
+                result = orig(self, *args, **kwargs)
+            except BaseException:
+                _release(token)
+                raise
             target = getattr(result, "browser", None) or result
-            _register(target)
+            if token:
+                _attach_release(target, token)
             return result
         launch.__name__ = getattr(orig, "__name__", "launch")
         launch.__doc__ = orig.__doc__
         return launch
 
-    def _wrap_async(orig):
+    def _wrap_async(orig, persistent):
         async def launch(self, *args, **kwargs):
-            verdict, reason = decide()
+            verdict, reason, strict = _admit(args, kwargs, persistent=persistent)
             if verdict not in (_ALLOW, _OFF):
                 _refuse(verdict, reason)
-            result = await orig(self, *args, **kwargs)
+            token = _reserve() if (strict and verdict == _ALLOW) else None
+            try:
+                result = await orig(self, *args, **kwargs)
+            except BaseException:
+                _release(token)
+                raise
             target = getattr(result, "browser", None) or result
-            _register(target)
+            if token:
+                _attach_release(target, token)
             return result
         launch.__name__ = getattr(orig, "__name__", "launch")
         launch.__doc__ = orig.__doc__
@@ -243,7 +354,7 @@ def install() -> bool:
             orig = getattr(cls, name, None)
             if orig is None or getattr(orig, "_saga_gated", False):
                 continue
-            new = wrapper(orig)
+            new = wrapper(orig, name == "launch_persistent_context")
             new._saga_gated = True  # type: ignore[attr-defined]
             setattr(cls, name, new)
     _installed = True

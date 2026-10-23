@@ -8,8 +8,8 @@ first passes the same admission decision the skills use:
 | verdict | when | what the caller sees |
 | -- | -- | -- |
 | `allow` | nothing open, pid headroom | launch proceeds, and the tree is recorded in `<HERMES_HOME>/bot-desktop/scratch-browser.lock` until it disconnects |
-| `reuse` | a headed browser is already open on the shared profile | `BrowserLaunchRefused` naming the DevTools port, so the caller attaches with `connect_over_cdp` instead of starting a second tree |
-| `busy` | another gated browser is still alive | `BrowserLaunchRefused` — queue the work |
+| `reuse` | a **headed** launch while a browser is already open on the shared profile | `BrowserLaunchRefused` naming the DevTools port, so the caller attaches with `connect_over_cdp` instead of starting a second tree |
+| `busy` | another gated **headed** browser is still alive (lock taken atomically before the launch) | `BrowserLaunchRefused` — queue the work |
 | `budget` | `pids.current + 340 + 40 > pids.max` | `BrowserLaunchRefused` — queue, or ask about the plan; do not change it |
 
 Why it exists: the skill rule, `bot_browser_session.py` and Chromium's profile singleton all cover
@@ -23,6 +23,10 @@ Check it without launching anything:
 ```bash
 PYTHONPATH=/opt/saga/browser-gate python3 -m saga_browser_gate [--json]
 ```
+
+`headless=True` launches are admitted on the pid budget alone: the reuse and busy verdicts are about the
+headed Bot Desktop window, and `hermes_cli/doctor_live.py` / `plugins/google_meet/meet_bot.py` are
+headless by design. A `launch_persistent_context` on the Bot Desktop profile counts as headed.
 
 `SAGA_BROWSER_GATE=off` in a process's environment bypasses it, deliberately and visibly.
 

@@ -38,6 +38,7 @@ export HERMES_DASHBOARD_BASIC_AUTH_SECRET="$dashboard_secret"
 if [ -z "${AGENT_BROWSER_ARGS:-}" ]; then
     AGENT_BROWSER_ARGS="$(HERMES_HOME_FOR_ARGS="${HERMES_HOME:-/data/.hermes}" /opt/hermes/.venv/bin/python - <<'PY_CONFIG'
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -51,7 +52,12 @@ try:
     import hermes_yaml
     cfg_path = Path(os.environ["HERMES_HOME_FOR_ARGS"]) / "config.yaml"
     cfg = hermes_yaml.safe_load(cfg_path.read_text()) or {}
-    extra = [str(a) for a in ((cfg.get("browser") or {}).get("chromium_args") or [])]
+    raw = (cfg.get("browser") or {}).get("chromium_args") or []
+    if isinstance(raw, str):
+        raw = shlex.split(raw)  # a flag list written as one string, not one flag per character
+    elif not isinstance(raw, (list, tuple)):
+        raise TypeError(f"chromium_args must be a list or a string, got {type(raw).__name__}")
+    extra = [str(a) for a in raw]
 except Exception as exc:  # noqa: BLE001 - boot must not fail over a flag list
     print(f"bot-desktop chromium flags: could not read browser.chromium_args ({exc}); "
           "using sandbox-bypass flags only", file=sys.stderr)
