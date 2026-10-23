@@ -148,7 +148,7 @@ def _held_lock() -> dict | None:
     return None
 
 
-def decide(*, headless: bool = False) -> tuple[str, str]:
+def decide(*, headless: bool = False, shared_target: bool = False) -> tuple[str, str]:
     """(verdict, reason) for a browser launch starting right now.
 
     `headless` is not a loophole, it is a different question. Two shipped callers inside the image
@@ -163,11 +163,19 @@ def decide(*, headless: bool = False) -> tuple[str, str]:
     # A headless tree cannot be pointed at the headed desktop's window, so the reuse and
     # single-tree verdicts do not apply to it; the budget check below still does.
     port = None if headless else _shared_profile_port()
-    if port:
+    if port and shared_target:
+        # Only a launch aimed at this profile can act on the advice.
         return _REUSE, (
-            f"a headed browser is already open on the Bot Desktop profile (DevTools :{port}). Do not "
+            f"a browser is already open on the Bot Desktop profile (DevTools :{port}). Do not "
             f"launch a second tree: attach with playwright.chromium.connect_over_cdp('http://127.0.0.1:{port}') "
             "and reuse the window that is on screen, or wait for the open session to finish.")
+    if port:
+        # Headed, but for its own profile/window (`hermes meet auth`, `meet join --headed`): it cannot
+        # attach to the desktop's jar, so it is refused as BUSY with a remedy it can act on.
+        return _BUSY, (
+            f"the Bot Desktop browser is open (DevTools :{port}) and this launch is headed but not "
+            "aimed at its profile — this container runs ONE browser tree at a time. Queue this work, "
+            "or close the Bot Desktop browser first.")
 
     held = None if headless else _held_lock()
     if held:
@@ -222,11 +230,18 @@ def _reserve() -> str | None:
             # under the winner's feet.
             os.link(tmp, path)
         except FileExistsError:
+            try:
+                stale_ino = path.stat().st_ino
+            except OSError:
+                stale_ino = None
             held = _held_lock()
             if held is None:
-                # Owner is gone (crashed, SIGKILLed): take the stale lock over instead of wedging.
+                # Owner is gone (crashed, SIGKILLed): take the stale lock over instead of wedging —
+                # but only the file we judged stale. A competitor that took the same lock over in
+                # between has linked a NEW inode there, and removing that one puts two trees in flight.
                 try:
-                    path.unlink()
+                    if stale_ino is not None and path.stat().st_ino == stale_ino:
+                        path.unlink()
                 except OSError:
                     pass
                 continue
@@ -271,12 +286,15 @@ def _attach_release(browser, token: str) -> None:
     def _release_on_disconnect(*_a) -> None:
         _release(token)
 
-    for event in ("disconnected", "disconnect"):
+    # Browser fires "disconnected"; launch_persistent_context returns a BrowserContext, whose
+    # terminal event is "close" (its .browser is None). `on()` registers an unknown event name
+    # silently, so register every terminal event rather than stopping at the first non-raising one:
+    # a reservation that never clears would refuse every later headed launch while this pid lives.
+    for event in ("disconnected", "close"):
         try:
             browser.on(event, _release_on_disconnect)
-            return
-        except Exception:  # noqa: BLE001 - async browsers take a listener, not on()
-            continue
+        except Exception:  # noqa: BLE001 - not a browser/context; nothing to hook
+            pass
 
 
 def _shared_persistent_target(args, kwargs) -> bool:
@@ -303,8 +321,9 @@ def _admit(args, kwargs, *, persistent: bool) -> tuple[str, str, bool]:
     A plainly headless launch is admitted on the pid budget alone.
     """
     headless = bool(kwargs.get("headless", True))  # Playwright's own default is headless
-    strict = (not headless) or (persistent and _shared_persistent_target(args, kwargs))
-    verdict, reason = decide(headless=not strict)
+    shared = bool(persistent and _shared_persistent_target(args, kwargs))
+    strict = (not headless) or shared
+    verdict, reason = decide(headless=not strict, shared_target=shared)
     return verdict, reason, strict
 
 

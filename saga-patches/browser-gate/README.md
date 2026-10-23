@@ -8,8 +8,8 @@ first passes the same admission decision the skills use:
 | verdict | when | what the caller sees |
 | -- | -- | -- |
 | `allow` | nothing open, pid headroom | launch proceeds, and the tree is recorded in `<HERMES_HOME>/bot-desktop/scratch-browser.lock` until it disconnects |
-| `reuse` | a **headed** launch while a browser is already open on the shared profile | `BrowserLaunchRefused` naming the DevTools port, so the caller attaches with `connect_over_cdp` instead of starting a second tree |
-| `busy` | another gated **headed** browser is still alive (lock taken atomically before the launch) | `BrowserLaunchRefused` — queue the work |
+| `reuse` | a **headed launch aimed at the shared Bot Desktop profile** while a browser is already open there | `BrowserLaunchRefused` naming the DevTools port, so the caller attaches with `connect_over_cdp` instead of starting a second tree |
+| `busy` | another gated **headed** browser is still alive, or a headed launch for a different profile/window while the desktop's browser is open (lock taken atomically before the launch) | `BrowserLaunchRefused` — queue the work |
 | `budget` | `pids.current + 340 + 40 > pids.max` | `BrowserLaunchRefused` — queue, or ask about the plan; do not change it |
 
 Why it exists: the skill rule, `bot_browser_session.py` and Chromium's profile singleton all cover

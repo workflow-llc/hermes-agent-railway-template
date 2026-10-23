@@ -2,7 +2,10 @@
 """Stop the Bot Desktop the moment a task is done: close the browser, then stop the screen.
 
 The desktop is OFF by default (`bot_desktop.auto_start: false`) and is started on demand — by the
-viewer page on load, or by `bot_screen_start.py` in the human-step flow. This is the other half:
+viewer page on load, by the tool boundary (`install_screen_hook`), or explicitly via the
+`display.start` RPC (`runtime.start()` in a script; the human-step flow uses
+`/data/.hermes/scripts/bot_screen_start.py`, a volume script that is not part of this image).
+This is the other half:
 so that "on demand" does not quietly mean "left running until the idle timer". Run it as the LAST
 step of any task that used the screen or a headed browser, and quote its numbers.
 

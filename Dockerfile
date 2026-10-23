@@ -18,7 +18,8 @@ COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 COPY bot-viewer /opt/hermes/plugins/bot-viewer
 
 # Bot Desktop (DEVS-1068): the desktop is OFF by default and started on demand — the viewer
-# page on load, or bot_screen_start.py in the human-step flow — then stopped by
+# page on load, the tool-boundary hook, or the display.start RPC the human-step flow calls via
+# /data/.hermes/scripts/bot_screen_start.py (volume script, not in this image) — then stopped by
 # bot_screen_stop.py when the task ends, with `bot_desktop.idle_stop_minutes: 10` as the fallback
 # for anything that forgets. Those two config keys live in /data/.hermes/config.yaml (volume), so
 # they need no rebuild; this layer only adds the code that enforces the cap.
