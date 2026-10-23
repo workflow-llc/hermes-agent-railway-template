@@ -879,6 +879,12 @@ export default class RFB extends EventTargetMixin {
     clipboardPasteFrom(text) {
         if (this._rfbConnectionState !== 'connected' || this._viewOnly) { return; }
         if (!(typeof text === 'string' && text.length > 0)) { return; }
+        // The bridge's filter refuses anything above MaxCutText (256 KiB) and closes the socket with
+        // 1003 — which also drops this viewer's lease. Bound it here, where it is still cheap.
+        if (text.length > 256 * 1024) {
+            Log.Warn('Clipboard paste skipped: ' + text.length + ' bytes exceeds MaxCutText');
+            return;
+        }
 
         let data = new TextEncoder().encode(text);
 
@@ -1764,7 +1770,20 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
 
-        RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
+        // The RFC pointer frame carries no deltas, so a scroll is the standard wheel button pressed
+        // and released once per notch: 4/5 up/down, 6/7 left/right.
+        const px = this._display.absX(x);
+        const py = this._display.absY(y);
+        const notches = (delta, up, down) => {
+            const steps = Math.min(Math.max(Math.round(Math.abs(delta) / 120), delta ? 1 : 0), 4);
+            const button = delta < 0 ? up : down;
+            for (let i = 0; i < steps; i++) {
+                RFB.messages.pointerEvent(this._sock, px, py, button);
+                RFB.messages.pointerEvent(this._sock, px, py, 0);
+            }
+        };
+        notches(dY, 4, 5);
+        notches(dX, 6, 7);
     }
 
     _handleWheel(ev) {
@@ -3701,28 +3720,27 @@ RFB.messages = {
         sock.flush();
     },
 
-    pointerEvent(sock, x, y, mask, dX = 0, dY = 0) {
+    pointerEvent(sock, x, y, mask) {
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
+        // BRIDGE-SAFE (SAGA): RFC 6143 §7.5.5 is type, 8-bit button mask, x(2), y(2) — six bytes.
+        // This fork wrote Kasm's eleven-byte variant (a 16-bit mask plus dX/dY), and the gateway's
+        // RfbClientFilter frames type 5 as six: it consumed the mask byte as `mask >> 8`, then read
+        // the leftover byte as the next message type and closed the stream with 1003. That fires on
+        // the first mouse move after Take over, i.e. exactly the interactive path. The wheel deltas
+        // have no RFC representation and are sent as wheel buttons instead (_sendScroll).
         buff[offset] = 5; // msg-type
 
-        buff[offset + 1] = mask >> 8;
-        buff[offset + 2] = mask;
+        buff[offset + 1] = mask;
 
-        buff[offset + 3] = x >> 8;
-        buff[offset + 4] = x;
+        buff[offset + 2] = x >> 8;
+        buff[offset + 3] = x;
 
-        buff[offset + 5] = y >> 8;
-        buff[offset + 6] = y;
+        buff[offset + 4] = y >> 8;
+        buff[offset + 5] = y;
 
-        buff[offset + 7] = dX >> 8;
-        buff[offset + 8] = dX;
-
-        buff[offset + 9] = dY >> 8;
-        buff[offset + 10] = dY;
-
-        sock._sQlen += 11;
+        sock._sQlen += 6;
         sock.flush();
     },
 
@@ -3891,6 +3909,13 @@ RFB.messages = {
             let sent = 0;
             while (sent < text.length) {
                 const room = Math.min(text.length - sent, sock._sQbufferSize - sock._sQlen);
+                if (room <= 0) {
+                    // flush() only drains while the socket is OPEN; on a closing socket the queue
+                    // never empties and this loop would wedge the tab. Stop instead of spinning.
+                    sock.flush();
+                    if (sock._sQbufferSize - sock._sQlen <= 0) break;
+                    continue;
+                }
                 buff.set(text.subarray(sent, sent + room), sock._sQlen);
                 sock._sQlen += room;
                 sent += room;

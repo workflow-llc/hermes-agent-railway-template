@@ -221,8 +221,13 @@ def _reserve() -> str | None:
                           "cmdline": " ".join(sys.argv)[:400]})
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return None
+    except OSError as exc:
+        # Fail closed: if the reservation cannot be recorded, nothing downstream can honour the
+        # single-tree rule, so admitting the launch turns the gate back into advice.
+        raise BrowserLaunchRefused(
+            f"Bot Desktop browser gate (busy): the shared lock at {path} is unusable ({exc}), so "
+            "this launch cannot be recorded as the only tree [override: SAGA_BROWSER_GATE=off]"
+        ) from None
     for _ in range(3):
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:

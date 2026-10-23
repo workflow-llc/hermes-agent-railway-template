@@ -37,6 +37,7 @@ COPY saga-patches/browser-gate /opt/saga/browser-gate
 # looking installed. `site` DOES import sitecustomize from site-packages, so the shim and the module
 # it needs are installed into every interpreter in the image.
 RUN set -eu; \
+    installed=0; \
     for py in /opt/hermes/.venv/bin/python /opt/hermes/tools/python-*/bin/python3; do \
         [ -x "$py" ] || continue; \
         site="$("$py" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" || continue; \
@@ -44,7 +45,10 @@ RUN set -eu; \
         install -m 0644 /opt/saga/browser-gate/saga_browser_gate.py "$site/saga_browser_gate.py"; \
         install -m 0644 /opt/saga/browser-gate/sitecustomize.py "$site/sitecustomize.py"; \
         echo "browser gate: installed into $site"; \
-    done
+        installed=$((installed + 1)); \
+    done; \
+    [ "$installed" -gt 0 ] || { \
+        echo "browser gate: no interpreter found — refusing to ship an inert gate" >&2; exit 1; }
 COPY --chmod=0755 saga-patches/bot-desktop/bot_screen_stop.py /opt/saga/bin/bot_screen_stop.py
 
 # Operator patch hook: s6 cont-init.d runs as root before any supervised service

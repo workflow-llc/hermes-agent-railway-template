@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/hermes/.venv/bin/python
 """Stop the Bot Desktop the moment a task is done: close the browser, then stop the screen.
 
 The desktop is OFF by default (`bot_desktop.auto_start: false`) and is started on demand — by the
