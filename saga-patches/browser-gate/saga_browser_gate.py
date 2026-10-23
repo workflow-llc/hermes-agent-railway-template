@@ -257,8 +257,13 @@ def _reserve() -> str | None:
                 f"(pid {held.get('pid')}, started {held.get('started')}) — this container runs ONE "
                 "browser tree at a time. Queue this work, or close that browser first. "
                 "[override: SAGA_BROWSER_GATE=off]") from None
-        except OSError:
-            return None
+        except OSError as exc:
+            # Same rule as the mkdir above: an unrecordable launch is refused, not admitted
+            # unrecorded. ENOSPC on the volume that holds the profile is the realistic trigger.
+            raise BrowserLaunchRefused(
+                f"Bot Desktop browser gate (busy): the shared lock at {path} could not be written "
+                f"({exc}), so this launch cannot be recorded as the only tree "
+                "[override: SAGA_BROWSER_GATE=off]") from None
         finally:
             try:
                 tmp.unlink()

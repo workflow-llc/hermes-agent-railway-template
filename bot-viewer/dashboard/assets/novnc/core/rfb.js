@@ -880,13 +880,14 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected' || this._viewOnly) { return; }
         if (!(typeof text === 'string' && text.length > 0)) { return; }
         // The bridge's filter refuses anything above MaxCutText (256 KiB) and closes the socket with
-        // 1003 — which also drops this viewer's lease. Bound it here, where it is still cheap.
-        if (text.length > 256 * 1024) {
-            Log.Warn('Clipboard paste skipped: ' + text.length + ' bytes exceeds MaxCutText');
+        // 1003 — which also drops this viewer's lease. Bound the ENCODED length, which is what the
+        // wire carries: `text.length` is UTF-16 code units, so a multi-byte paste would pass a bound
+        // expressed in those and still trip the filter.
+        let data = new TextEncoder().encode(text);
+        if (data.length > 256 * 1024) {
+            Log.Warn('Clipboard paste skipped: ' + data.length + ' bytes exceeds MaxCutText');
             return;
         }
-
-        let data = new TextEncoder().encode(text);
 
         let h = hashUInt8Array(data);
         // avoid resending the same data if larger than 64k

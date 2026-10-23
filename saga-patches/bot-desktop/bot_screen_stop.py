@@ -146,13 +146,22 @@ def _port_holder() -> int | None:
     return pid
 
 
-def stop_browser(timeout: float = 12.0) -> dict:
+def stop_browser(timeout: float = 12.0, *, may_kill=None) -> dict:
+    """Close this profile's browser tree, unless `may_kill()` says a human has taken over.
+
+    The lease is re-read at both destructive points (before SIGTERM and before the SIGKILL
+    escalation), because a takeover can land inside the 12 s the tree takes to die — and for the
+    human that window is the browser itself, not the screen `runtime.stop()` later stops.
+    """
     tree = chrome_pids()
     holder = _port_holder()
     if holder and holder not in tree:
         tree.append(holder)
     if not tree:
         return {"closed": False, "killed": [], "reason": "no Chromium on this profile"}
+    if may_kill is not None and not may_kill():
+        return {"closed": False, "killed": [],
+                "reason": "a human took over while closing; browser left running"}
     # Signal the whole recorded tree, not a fresh scan: once the root exits its children are
     # reparented to init and a second scan can no longer attribute them to this profile.
     for pid in tree:
@@ -164,6 +173,9 @@ def stop_browser(timeout: float = 12.0) -> dict:
     while time.time() < deadline and _alive(tree):
         time.sleep(0.5)
     killed = []
+    if may_kill is not None and not may_kill():
+        return {"closed": False, "killed": [], "signalled": tree,
+                "reason": "a human took over while closing; SIGKILL escalation skipped"}
     for pid in _alive(tree):
         try:
             os.kill(pid, signal.SIGKILL)
@@ -227,7 +239,12 @@ def main() -> int:
         return 2
 
     before = cgroup_pids()
-    browser_result = stop_browser()
+    browser_result = stop_browser(may_kill=lambda: not lease.human_holds())
+    if "a human took over" in str(browser_result.get("reason") or ""):
+        msg = ("refused mid-stop: a human took over while the browser was closing — "
+               "browser and screen left running, hand back first")
+        print(json.dumps({"stopped": False, "reason": msg}) if as_json else msg)
+        return 2
     lock_cleared = clear_scratch_lock()
     screen_stopped = False
     error = None
