@@ -3876,19 +3876,25 @@ RFB.messages = {
         const text = textIndex === -1 ? null : dataset[textIndex];
         if (text && text.length) {
             const buff = sock._sQ;
-            const offset = sock._sQlen;
-            if (offset + 8 + text.length <= buff.length) {
-                buff[offset] = 6;  // ClientCutText
-                buff[offset + 1] = 0;
-                buff[offset + 2] = 0;
-                buff[offset + 3] = 0;
-                new DataView(buff.buffer, buff.byteOffset, buff.byteLength)
-                    .setUint32(offset + 4, text.length);  // big-endian by default
-                buff.set(text, offset + 8);
-                sock._sQlen += 8 + text.length;
+            let offset = sock._sQlen;
+            buff[offset] = 6;  // ClientCutText
+            buff[offset + 1] = 0;
+            buff[offset + 2] = 0;
+            buff[offset + 3] = 0;
+            new DataView(buff.buffer, buff.byteOffset, buff.byteLength)
+                .setUint32(offset + 4, text.length);  // big-endian by default
+            offset += 8;
+            sock._sQlen = offset;
+            // The send queue is 10 KiB (websock.js) while the bridge frames cuts up to 256 KiB, so
+            // the payload goes out in queue-sized chunks, flushed in order — same shape as the
+            // binary-clipboard writer below. A single write would silently drop any real paste.
+            let sent = 0;
+            while (sent < text.length) {
+                const room = Math.min(text.length - sent, sock._sQbufferSize - sock._sQlen);
+                buff.set(text.subarray(sent, sent + room), sock._sQlen);
+                sock._sQlen += room;
+                sent += room;
                 sock.flush();
-            } else {
-                Log.Warn("Clipboard paste skipped: " + text.length + " bytes does not fit the send queue");
             }
         }
         return;

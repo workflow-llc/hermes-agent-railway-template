@@ -238,17 +238,26 @@ async function observe() {
 // nothing running. Opening the page therefore starts the screen and waits for it, instead of
 // printing "call display.start first" and giving up.
 async function ensureObserved() {
+  // `display.start` blocks server-side for up to 15 s (runtime.start(wait_seconds=15), under
+  // start.lock), so calling it on every 2 s retry meant 30 overlapping bring-ups and a worst case
+  // of minutes. Ask once, then poll observe() — which is cheap and is the real readiness signal.
+  let started = false;
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
       return await rpc('display.observe', {});
     } catch (err) {
       const msg = String((err && err.message) || err);
       if (!NOT_RUNNING.test(msg)) throw err;
-      say(attempt === 0 ? 'starting the bot screen…' : 'waiting for the screen to come up…');
-      try {
-        await rpc('display.start', {}); // idempotent: a no-op while it is already starting/up
-      } catch (startErr) {
-        if (!/already|running|starting/i.test(String(startErr.message))) throw startErr;
+      if (!started) {
+        started = true;
+        say('starting the bot screen…');
+        try {
+          await rpc('display.start', {}); // idempotent: a no-op while it is already starting/up
+        } catch (startErr) {
+          if (!/already|running|starting/i.test(String(startErr.message))) throw startErr;
+        }
+      } else {
+        say('waiting for the screen to come up…');
       }
       await sleep(2000);
     }

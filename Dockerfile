@@ -28,6 +28,23 @@ COPY bot-viewer /opt/hermes/plugins/bot-viewer
 # BrowserType.launch in EVERY python process, so a scratch `chromium.launch()` is refused while a
 # headed browser is open or the pid budget is spent — the three-layer cap stops being advice.
 COPY saga-patches/browser-gate /opt/saga/browser-gate
+
+# The PYTHONPATH ENV below is NOT enough. The bundled launcher is not a console script: it does
+# `unset PYTHONPATH PYTHONHOME; export PYTHONPATH="$REPO:$SITE"` before exec'ing python
+# (/opt/hermes/.venv/bin/hermes:16-17 and the same lines in libexec/hermes*), so
+# /opt/saga/browser-gate never reaches sys.path in the gateway, the dashboard or any `hermes`
+# subcommand — and `sitecustomize` is then never imported, which would leave this gate inert while
+# looking installed. `site` DOES import sitecustomize from site-packages, so the shim and the module
+# it needs are installed into every interpreter in the image.
+RUN set -eu; \
+    for py in /opt/hermes/.venv/bin/python /opt/hermes/tools/python-*/bin/python3; do \
+        [ -x "$py" ] || continue; \
+        site="$("$py" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" || continue; \
+        [ -d "$site" ] || continue; \
+        install -m 0644 /opt/saga/browser-gate/saga_browser_gate.py "$site/saga_browser_gate.py"; \
+        install -m 0644 /opt/saga/browser-gate/sitecustomize.py "$site/sitecustomize.py"; \
+        echo "browser gate: installed into $site"; \
+    done
 COPY --chmod=0755 saga-patches/bot-desktop/bot_screen_stop.py /opt/saga/bin/bot_screen_stop.py
 
 # Operator patch hook: s6 cont-init.d runs as root before any supervised service

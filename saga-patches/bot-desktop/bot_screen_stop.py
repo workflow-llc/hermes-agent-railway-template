@@ -232,6 +232,18 @@ def main() -> int:
     screen_stopped = False
     error = None
     if not keep_screen:
+        # Re-assert the transition immediately before the screen goes down too: stop_browser() can
+        # burn its whole timeout, and a takeover that lands in that window owns the screen now.
+        if lease.release(unless_human=True).holder == lease.HUMAN:
+            out = {"browser": browser_result, "scratch_lock_cleared": lock_cleared,
+                   "screen_running_after": True, "screen_stopped": False,
+                   "pids_before": before, "pids_after": cgroup_pids(),
+                   "refused": "a human took over while the browser was closing; screen left running"}
+            if as_json:
+                print(json.dumps(out, indent=1, default=str))
+            else:
+                print(out["refused"])
+            return 2
         try:
             screen_stopped = runtime.stop()
         except Exception as exc:  # noqa: BLE001 - reported, not raised
