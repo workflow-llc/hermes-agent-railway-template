@@ -416,8 +416,28 @@ _TARGET_MODULES = frozenset({
 })
 
 
+_chaining = False
+
+
 def _chain_other_sitecustomize() -> None:
-    """Re-import any sitecustomize this one shadows (Debian ships the apport hook)."""
+    """Re-import any sitecustomize this one shadows (Debian ships the apport hook).
+
+    Two copies of the shim exist by design (the image installs one into site-packages and keeps
+    /opt/saga/browser-gate on PYTHONPATH), so this must never chain *itself*: a re-entrancy guard
+    for the same module plus a content check for the other copy keeps the chain at one level
+    instead of recursing a hundred deep.
+    """
+    global _chaining
+    if _chaining:
+        return
+    _chaining = True
+    try:
+        _chain_other_sitecustomize_locked()
+    finally:
+        _chaining = False
+
+
+def _chain_other_sitecustomize_locked() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     for entry in list(sys.path):
         try:
@@ -425,6 +445,13 @@ def _chain_other_sitecustomize() -> None:
                 continue
             candidate = os.path.join(entry, "sitecustomize.py")
             if not os.path.isfile(candidate):
+                continue
+            try:
+                with open(candidate, encoding="utf-8", errors="replace") as fh:
+                    head = fh.read(400)
+            except OSError:
+                continue
+            if "SAGA browser gate" in head:  # the other copy of this shim
                 continue
             spec = importlib.util.spec_from_file_location("_saga_chained_sitecustomize", candidate)
             if spec and spec.loader:

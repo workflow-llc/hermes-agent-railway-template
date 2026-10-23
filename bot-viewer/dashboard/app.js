@@ -172,6 +172,12 @@ function connectRfb(obs) {
     }
   }
   self.viewOnly = true; // watch-only until Take over, and the bridge enforces it server-side
+  // noVNC's ui.js normally sets these from the server's capabilities, and this plugin ships no
+  // ui.js: without them `checkLocalClipboard()` returns on its first line, so a human holding the
+  // lease cannot paste a password or a 2FA code into the bot's screen. Plain text only — the binary
+  // clipboard stays off (Kasm's type 180 is refused by the bridge).
+  self.clipboardUp = true;
+  self.clipboardSeamless = true;
   self.scaleViewport = true;
   self.resizeSession = false;
   self.background = '#0b0d10';
