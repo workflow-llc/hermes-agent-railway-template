@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>SAGA bot screen</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header>
+  <div class="title">
+    <strong>SAGA bot screen</strong>
+    <span id="mode" class="badge" data-holding="0">View only</span>
+  </div>
+  <div class="actions">
+    <button id="start" hidden>Start screen</button>
+    <button id="takeover" disabled>Take over</button>
+    <button id="handback" disabled>Hand back</button>
+  </div>
+</header>
+<p id="status" role="status">loading…</p>
+<main id="stage">
+  <div id="screen" tabindex="0"></div>
+</main>
+<p class="note">
+  Watching is view-only. Input reaches the screen only after <em>Take over</em>; Hermes resumes from
+  whatever page is open once you <em>Hand back</em> or close this tab.
+</p>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

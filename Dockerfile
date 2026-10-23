@@ -1,10 +1,21 @@
-# `v0.22.2` is digest-pinned to the Hermes Agent v0.22.2 stable build (upstream tag
-# rc.2-v0.22.2, published 2026-10-15). The stable pipeline also publishes this release
-# as `stable`/`latest`, but we pin the explicit version tag so a `stable` re-point
+# `v0.22.2-desktop` is digest-pinned to the Hermes Agent v0.22.2 stable build with the
+# `HERMES_BOT_DESKTOP=1` image variant (upstream tag rc.2-v0.22.2, published 2026-10-15).
+# Same Hermes code as `v0.22.2`, plus the Bot Desktop display stack that variant installs:
+# tigervnc-standalone-server, the Xfce components (panel/wm/desktop/settings/terminal),
+# dbus-x11, x11-utils/xkb, xauth and chromium (~233 MB). DEVS-1068 needs it because the
+# plain image ships no Xvnc, so `tools/bot_desktop/runtime.status()` reports the stack
+# missing and nothing can start. We pin the explicit version tag so a `stable` re-point
 # cannot move this service silently. amd64 manifest digest, verified via Docker Hub.
-FROM nousresearch/hermes-agent:v0.22.2@sha256:a11574b7fe8e1631d7d88d556677dac693bc058abf558cdeb899155688c1bf05
+FROM nousresearch/hermes-agent:v0.22.2-desktop@sha256:81d810941d05343bcd09fa57abfb4d158bffd57c1d85e04ade5e57c2c0794a25
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
+
+# Bot Screen viewer page (DEVS-1068): a plain-browser noVNC client served by the dashboard at
+# /api/plugins/bot-viewer/page. Installed as a bundled dashboard plugin — the image's own
+# plugins/ dir is on the same discovery path as kanban/achievements, so no volume surgery and
+# no root-owned /data/.hermes/plugins. Static only: the page drives the gateway's existing
+# display.observe / display.lease.* RPCs and the /api/display/ws bridge. See bot-viewer/README.md.
+COPY bot-viewer /opt/hermes/plugins/bot-viewer
 
 # Operator patch hook: s6 cont-init.d runs as root before any supervised service
 # starts. See saga-patches/slack-legacy-status.sh for what it does and why it can

@@ -9,10 +9,10 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on Railway u
 The Dockerfile is pinned to this official image:
 
 ```text
-nousresearch/hermes-agent:v0.22.2@sha256:a11574b7fe8e1631d7d88d556677dac693bc058abf558cdeb899155688c1bf05
+nousresearch/hermes-agent:v0.22.2-desktop@sha256:81d810941d05343bcd09fa57abfb4d158bffd57c1d85e04ade5e57c2c0794a25
 ```
 
-`v0.22.2` (digest-pinned) is Hermes Agent v0.22.2, a patch release; v0.22.1 was built from the wrong commit and shipped unreleased gateway work, and v0.22.0 was the "Threshold Release" (~24,200 commits since v0.21.0). The `v0.22.2` Docker tag is the same image the moving `stable`/`latest` references point at as of 2026-10-15, but the explicit tag is pinned so a `stable` re-point cannot move this service silently. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
+`v0.22.2-desktop` (digest-pinned) is Hermes Agent v0.22.2 in its `HERMES_BOT_DESKTOP=1` variant — identical Hermes code, plus the Bot Desktop display stack (tigervnc-standalone-server, Xfce components, dbus-x11, xauth, chromium; ~233 MB) that the Bot Screen needs against a headless Railway host (DEVS-1068). The tag is the same release the plain `v0.22.2` pin tracked; only the package layer differs. v0.22.2 itself is a patch release; v0.22.1 was built from the wrong commit and shipped unreleased gateway work, and v0.22.0 was the "Threshold Release" (~24,200 commits since v0.21.0). The `v0.22.2` Docker tag is the same image the moving `stable`/`latest` references point at as of 2026-10-15, but the explicit tag is pinned so a `stable` re-point cannot move this service silently. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
 
 Note for upgrades: v0.22.2 fixes the gateway-after-reboot startup regression (#133744 — an early PID claimed by an unrelated process made a supervised gateway refuse to start).
 

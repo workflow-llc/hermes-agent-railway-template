@@ -1,0 +1,13 @@
+{
+  "name": "bot-viewer",
+  "label": "Bot Screen",
+  "description": "Plain-browser viewer for this gateway's Bot Desktop: watch the screen, Take over / Hand back. Standalone page at /api/plugins/bot-viewer/page — no Hermes Desktop required.",
+  "icon": "Monitor",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/bot-screen",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
