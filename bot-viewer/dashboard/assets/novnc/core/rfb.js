@@ -292,6 +292,11 @@ export default class RFB extends EventTargetMixin {
             }
         });
         this._sock.on('close', (e) => {
+            // BRIDGE-SAFE (SAGA): the bridge distinguishes a deliberate stop (4001, or a bare
+            // 1000 when the gateway tears down under an attached viewer), an eviction (4000) and a
+            // network drop (1006) purely by this code. It used to reach only a log string, so a
+            // caller could not tell them apart; carry it into the disconnect event below.
+            this._lastCloseCode = (e && e.code) || 1006;
             Log.Debug("WebSocket on-close event");
             let msg = "";
             if (e.code) {
@@ -874,8 +879,15 @@ export default class RFB extends EventTargetMixin {
     clipboardPasteFrom(text) {
         if (this._rfbConnectionState !== 'connected' || this._viewOnly) { return; }
         if (!(typeof text === 'string' && text.length > 0)) { return; }
-
+        // The bridge's filter refuses anything above MaxCutText (256 KiB) and closes the socket with
+        // 1003 — which also drops this viewer's lease. Bound the ENCODED length, which is what the
+        // wire carries: `text.length` is UTF-16 code units, so a multi-byte paste would pass a bound
+        // expressed in those and still trip the filter.
         let data = new TextEncoder().encode(text);
+        if (data.length > 256 * 1024) {
+            Log.Warn('Clipboard paste skipped: ' + data.length + ' bytes exceeds MaxCutText');
+            return;
+        }
 
         let h = hashUInt8Array(data);
         // avoid resending the same data if larger than 64k
@@ -1462,7 +1474,8 @@ export default class RFB extends EventTargetMixin {
             case 'disconnected':
                 this.dispatchEvent(new CustomEvent(
                     "disconnect", { detail:
-                                    { clean: this._rfbCleanDisconnect } }));
+                                    { clean: this._rfbCleanDisconnect,
+                                      code: this._lastCloseCode } }));
                 break;
         }
     }
@@ -1758,7 +1771,20 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
 
-        RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
+        // The RFC pointer frame carries no deltas, so a scroll is the standard wheel button pressed
+        // and released once per notch: 4/5 up/down, 6/7 left/right.
+        const px = this._display.absX(x);
+        const py = this._display.absY(y);
+        const notches = (delta, up, down) => {
+            const steps = Math.min(Math.max(Math.round(Math.abs(delta) / 120), delta ? 1 : 0), 4);
+            const button = delta < 0 ? up : down;
+            for (let i = 0; i < steps; i++) {
+                RFB.messages.pointerEvent(this._sock, px, py, button);
+                RFB.messages.pointerEvent(this._sock, px, py, 0);
+            }
+        };
+        notches(dY, 4, 5);
+        notches(dX, 6, 7);
     }
 
     _handleWheel(ev) {
@@ -3098,6 +3124,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendUdpUpgrade() {
+        // BRIDGE-SAFE: 181 is KasmVNC's WebRTC/UDP transit message, sent unconditionally 3 s after
+        // connect. The gateway's RFB gate refuses unknown types, so the viewer was being dropped
+        // ~3 s into a healthy stream. TCP RFB through the socket bridge is the only transport here.
+        return;
         if (this._transitConnectionState == this.TransitConnectionStates.Upgrading) {
             return;
         }
@@ -3129,6 +3159,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendUdpDowngrade() {
+        // BRIDGE-SAFE: 181 again (see _sendUdpUpgrade).
+        return;
         this._changeTransitConnectionState(this.TransitConnectionStates.Downgrading);
         const buff = this._sock._sQ;
         const offset = this._sock._sQlen;
@@ -3689,28 +3721,27 @@ RFB.messages = {
         sock.flush();
     },
 
-    pointerEvent(sock, x, y, mask, dX = 0, dY = 0) {
+    pointerEvent(sock, x, y, mask) {
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
+        // BRIDGE-SAFE (SAGA): RFC 6143 §7.5.5 is type, 8-bit button mask, x(2), y(2) — six bytes.
+        // This fork wrote Kasm's eleven-byte variant (a 16-bit mask plus dX/dY), and the gateway's
+        // RfbClientFilter frames type 5 as six: it consumed the mask byte as `mask >> 8`, then read
+        // the leftover byte as the next message type and closed the stream with 1003. That fires on
+        // the first mouse move after Take over, i.e. exactly the interactive path. The wheel deltas
+        // have no RFC representation and are sent as wheel buttons instead (_sendScroll).
         buff[offset] = 5; // msg-type
 
-        buff[offset + 1] = mask >> 8;
-        buff[offset + 2] = mask;
+        buff[offset + 1] = mask;
 
-        buff[offset + 3] = x >> 8;
-        buff[offset + 4] = x;
+        buff[offset + 2] = x >> 8;
+        buff[offset + 3] = x;
 
-        buff[offset + 5] = y >> 8;
-        buff[offset + 6] = y;
+        buff[offset + 4] = y >> 8;
+        buff[offset + 5] = y;
 
-        buff[offset + 7] = dX >> 8;
-        buff[offset + 8] = dX;
-
-        buff[offset + 9] = dY >> 8;
-        buff[offset + 10] = dY;
-
-        sock._sQlen += 11;
+        sock._sQlen += 6;
         sock.flush();
     },
 
@@ -3855,8 +3886,45 @@ RFB.messages = {
     },
 
     sendBinaryClipboard(sock, dataset, mimes) {
+        // BRIDGE-SAFE (SAGA): 180 is KasmVNC-only and the gateway's RFB gate closes on it.
+        // This fork routes EVERY clipboard write through here (`clipboardPasteFrom`,
+        // `clipboardPasteDataFrom`) and has no ClientCutText writer of its own, so plain text —
+        // the password / 2FA paste a human needs while holding the lease — is framed as RFC 6143
+        // type 6 right here, then the binary path below stays off.
+        const textIndex = mimes ? mimes.indexOf('text/plain') : -1;
+        const text = textIndex === -1 ? null : dataset[textIndex];
+        if (text && text.length) {
+            const buff = sock._sQ;
+            let offset = sock._sQlen;
+            buff[offset] = 6;  // ClientCutText
+            buff[offset + 1] = 0;
+            buff[offset + 2] = 0;
+            buff[offset + 3] = 0;
+            new DataView(buff.buffer, buff.byteOffset, buff.byteLength)
+                .setUint32(offset + 4, text.length);  // big-endian by default
+            offset += 8;
+            sock._sQlen = offset;
+            // The send queue is 10 KiB (websock.js) while the bridge frames cuts up to 256 KiB, so
+            // the payload goes out in queue-sized chunks, flushed in order — same shape as the
+            // binary-clipboard writer below. A single write would silently drop any real paste.
+            let sent = 0;
+            while (sent < text.length) {
+                const room = Math.min(text.length - sent, sock._sQbufferSize - sock._sQlen);
+                if (room <= 0) {
+                    // flush() only drains while the socket is OPEN; on a closing socket the queue
+                    // never empties and this loop would wedge the tab. Stop instead of spinning.
+                    sock.flush();
+                    if (sock._sQbufferSize - sock._sQlen <= 0) break;
+                    continue;
+                }
+                buff.set(text.subarray(sent, sent + room), sock._sQlen);
+                sock._sQlen += room;
+                sent += room;
+                sock.flush();
+            }
+        }
+        return;
 
-        
         const buff = sock._sQ;
         let offset = sock._sQlen;
 
@@ -3946,6 +4014,13 @@ RFB.messages = {
     },
 
     setMaxVideoResolution(sock, width, height) {
+        // BRIDGE-SAFE: message type 252 is a KasmVNC extension. The gateway's RfbClientFilter
+        // (tools/bot_desktop/rfb_filter.py) implements RFC 6143 plus TigerVNC's 150/248/251/255 and
+        // closes the socket with 1003 "unknown RFB client message type 252" — which killed the
+        // viewer on the first framebuffer update. The cap is a Kasm-only rendering hint; the
+        // server's own size (-geometry 1440x900) is what applies here.
+        return;
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -3987,6 +4062,9 @@ RFB.messages = {
     },
 
     requestStats(sock) {
+        // BRIDGE-SAFE: 178 is KasmVNC-only; the gateway's RFB gate closes on unknown types.
+        return;
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -4003,6 +4081,9 @@ RFB.messages = {
     },
 
     sendFrameStats(sock, allMs, renderMs) {
+        // BRIDGE-SAFE: 179 is KasmVNC-only; the gateway's RFB gate closes on unknown types.
+        return;
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -4149,6 +4230,9 @@ RFB.messages = {
     },
 
     xvpOp(sock, ver, op) {
+        // BRIDGE-SAFE: 250 is XVP, which the gateway's RFB gate does not implement (it would close
+        // the stream). Reboot/shutdown of the bot's VM is not a viewer action anyway.
+        return;
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
