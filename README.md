@@ -9,12 +9,11 @@ Deploy [Hermes Agent](https://github.com/NousResearch/hermes-agent) on Railway u
 The Dockerfile is pinned to this official image:
 
 ```text
-nousresearch/hermes-agent:v0.22.2-desktop@sha256:81d810941d05343bcd09fa57abfb4d158bffd57c1d85e04ade5e57c2c0794a25
+nousresearch/hermes-agent:v0.22.5-desktop@sha256:b7837e696eebce08495f6984a79a0a6a7ef696af746d407debff26d88473a389
 ```
 
-`v0.22.2-desktop` (digest-pinned) is Hermes Agent v0.22.2 in its `HERMES_BOT_DESKTOP=1` variant — identical Hermes code, plus the Bot Desktop display stack (tigervnc-standalone-server, Xfce components, dbus-x11, xauth, chromium; ~233 MB) that the Bot Screen needs against a headless Railway host (DEVS-1068). The tag is the same release the plain `v0.22.2` pin tracked; only the package layer differs. v0.22.2 itself is a patch release; v0.22.1 was built from the wrong commit and shipped unreleased gateway work, and v0.22.0 was the "Threshold Release" (~24,200 commits since v0.21.0). The `v0.22.2` Docker tag is the same image the moving `stable`/`latest` references point at as of 2026-10-15, but the explicit tag is pinned so a `stable` re-point cannot move this service silently. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
-
-Note for upgrades: v0.22.2 fixes the gateway-after-reboot startup regression (#133744 — an early PID claimed by an unrelated process made a supervised gateway refuse to start).
+`v0.22.5-desktop` (digest-pinned) is Hermes Agent v0.22.5 in its `HERMES_BOT_DESKTOP=1` variant — identical Hermes code, plus the Bot Desktop display stack (tigervnc-standalone-server, Xfce components, dbus-x11, xauth, chromium; ~233 MB) that the Bot Screen needs against a headless Railway host (DEVS-1068). It rolls up everything since our previous pin (v0.22.2): v0.22.3 (~620 PRs), v0.22.4 (13 PRs) and v0.22.5 (81 PRs). v0.22.5 matters to us because it is the first release with pluggable delegation backends (`ctx.register_delegation_provider`), so the `advanced-delegation` plugin (profile routes / model map) can install — it declares `requires_hermes: >=0.22.5`, which v0.22.2 refused. The explicit tag is pinned so a `stable`/`latest` re-point cannot move this service silently; the digest is the linux/amd64 manifest entry. The compatibility entrypoint delegates to this release's upstream entrypoint dispatcher so both normal PID-1 startup and Railway runtimes with an init wrapper are supported.
+Note for upgrades: v0.22.3-v0.22.5 are patch releases on the v0.22.0 "Threshold Release" line; v0.22.2 already carried the gateway-after-reboot fix (#133744). Re-verify the `saga-patches/` boot hooks and the multiplex topology after the roll-out.
 
 Use these service settings:
 
