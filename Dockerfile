@@ -1,17 +1,17 @@
-# `v0.22.5-desktop` is digest-pinned to the Hermes Agent v0.22.5 stable build with the
-# `HERMES_BOT_DESKTOP=1` image variant (upstream desktop variant of the v0.22.5 stable
-# release, rc.3 candidate, published 2026-10-23). Rolled up from v0.22.2: v0.22.3
-# (~620 PRs), v0.22.4 (13 PRs) and v0.22.5 (81 PRs) — v0.22.5 is the first release with
-# pluggable delegation backends (`ctx.register_delegation_provider`), which the
-# advanced-delegation plugin (profile_routes / model_map) requires; the plugin declares
-# `requires_hermes: >=0.22.5` and v0.22.2 refuses to install it.
-# Same Hermes code as `v0.22.5`, plus the Bot Desktop display stack that variant installs:
+# `v0.22.7-desktop` is digest-pinned to the Hermes Agent v0.22.7 stable build with the
+# `HERMES_BOT_DESKTOP=1` image variant (upstream desktop variant of the v0.22.7 stable
+# release, published 2026-11-03). Rolled up from v0.22.5: v0.22.6 (~776 PRs, 3,448
+# commits) and v0.22.7 (~174 PRs) — patch releases on the v0.22.0 "Threshold Release"
+# line. The v0.22.5 baseline already carried the pluggable delegation backends
+# (`ctx.register_delegation_provider`) that the advanced-delegation plugin
+# (profile_routes / model_map) requires, so nothing in this window is a prerequisite.
+# Same Hermes code as `v0.22.7`, plus the Bot Desktop display stack that variant installs:
 # tigervnc-standalone-server, the Xfce components (panel/wm/desktop/settings/terminal),
 # dbus-x11, x11-utils/xkb, xauth and chromium (~233 MB). DEVS-1068 needs it because the
 # plain image ships no Xvnc, so `tools/bot_desktop/runtime.status()` reports the stack
 # missing and nothing can start. We pin the explicit version tag so a `stable` re-point
 # cannot move this service silently. amd64 manifest digest, verified via Docker Hub.
-FROM nousresearch/hermes-agent:v0.22.5-desktop@sha256:b7837e696eebce08495f6984a79a0a6a7ef696af746d407debff26d88473a389
+FROM nousresearch/hermes-agent:v0.22.7-desktop@sha256:2393aaca1b7d53b5c04c1b98d5f2b126f763ba3440b0724f4af185415974096f
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 
