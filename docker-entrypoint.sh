@@ -22,4 +22,72 @@ export HERMES_DASHBOARD_BASIC_AUTH_USERNAME="$dashboard_username"
 export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="$dashboard_password"
 export HERMES_DASHBOARD_BASIC_AUTH_SECRET="$dashboard_secret"
 
+# --- Bot Desktop Chromium flags: browser.chromium_args -> AGENT_BROWSER_ARGS -------------------
+# AGENT_BROWSER_ARGS is agent-browser's documented launch-flag env ("--args <args> ... (or
+# AGENT_BROWSER_ARGS)"), and tools/browser_tool_session.py::_apply_chromium_sandbox_args leaves it
+# untouched when it is already set. That makes it the one knob that reaches the agent's headed
+# Chromium without patching the image's copy of Hermes. The sandbox-bypass flags are ALWAYS
+# included: they are what lets Chromium start as uid 10000 in a container, and setting the
+# variable at all suppresses the code that would otherwise add them.
+#
+# Measured on DEVS-1068 (one headed Chromium, about:blank): 180 threads with Playwright's default
+# flags, 114 with the set below; with a real page and a login form, 341 before the trim. cgroup
+# pids count threads, so this is what keeps one session at ~+145 of a 1000 cap instead of ~+270.
+# The dock's Browser icon (tools/bot_desktop/browser.py::dock_argv) does not read env and keeps
+# Playwright's defaults; the agent's browse path — the one that costs the pids — is covered.
+if [ -z "${AGENT_BROWSER_ARGS:-}" ]; then
+    AGENT_BROWSER_ARGS="$(HERMES_HOME_FOR_ARGS="${HERMES_HOME:-/data/.hermes}" /opt/hermes/.venv/bin/python - <<'PY_CONFIG'
+import os
+import shlex
+import sys
+from pathlib import Path
+
+base = ["--no-sandbox", "--disable-dev-shm-usage"]
+extra = []
+try:
+    # hermes_yaml, not `yaml`: the venv has no PyYAML, and a silent ImportError here would ship the
+    # image with the knob missing while looking like it worked. hermes_yaml is the repo's own
+    # YAML-1.1 reader (ruamel), the same one the config loader uses.
+    sys.path.insert(0, "/opt/hermes")
+    import hermes_yaml
+    cfg_path = Path(os.environ["HERMES_HOME_FOR_ARGS"]) / "config.yaml"
+    cfg = hermes_yaml.safe_load(cfg_path.read_text()) or {}
+    raw = (cfg.get("browser") or {}).get("chromium_args") or []
+    if isinstance(raw, str):
+        raw = shlex.split(raw)  # a flag list written as one string, not one flag per character
+    elif not isinstance(raw, (list, tuple)):
+        raise TypeError(f"chromium_args must be a list or a string, got {type(raw).__name__}")
+    parsed = [str(a) for a in raw]
+    # AGENT_BROWSER_ARGS is a comma-separated list (upstream splits on ","), so a flag that itself
+    # contains a comma — `--window-size=1280,720`, `--disable-features=A,B` — would arrive at
+    # Chromium as two argv entries. Refuse it loudly instead of launching something nobody asked
+    # for; `extra` is only assigned after the check, so the fallback really is the base flags.
+    for arg in parsed:
+        if "," in arg:
+            raise ValueError(f"chromium_args item contains a comma, which AGENT_BROWSER_ARGS "
+                             f"cannot carry through to Chromium: {arg!r}")
+    extra = parsed
+except Exception as exc:  # noqa: BLE001 - boot must not fail over a flag list
+    print(f"bot-desktop chromium flags: could not read browser.chromium_args ({exc}); "
+          "using sandbox-bypass flags only", file=sys.stderr)
+seen, out = set(), []
+for arg in base + extra:
+    if arg not in seen:
+        seen.add(arg)
+        out.append(arg)
+print(",".join(out))
+PY_CONFIG
+)"
+    export AGENT_BROWSER_ARGS
+    echo "bot-desktop chromium flags: $AGENT_BROWSER_ARGS"
+else
+    # A caller-set value must not remove the flags this container needs to start Chromium at all:
+    # tools/browser_tool_session.py adds --no-sandbox/--disable-dev-shm-usage only when the variable
+    # is ABSENT, so inheriting a caller value would launch Chromium as uid 10000 with the sandbox on
+    # ("No usable sandbox!") and nothing would point back to this variable. Merge, don't skip.
+    AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage,$AGENT_BROWSER_ARGS"
+    export AGENT_BROWSER_ARGS
+    echo "bot-desktop chromium flags (merged with caller value): $AGENT_BROWSER_ARGS"
+fi
+
 exec /opt/hermes/docker/entrypoint-dispatch.sh "$@"
