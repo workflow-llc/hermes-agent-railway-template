@@ -36,6 +36,12 @@ COPY --chmod=0755 saga-patches/slack-legacy-status.sh /etc/cont-init.d/020-slack
 # script, which the host-singleton guard refuses. See saga-patches/code-review-gateway.sh.
 COPY --chmod=0755 saga-patches/code-review-gateway.sh /etc/cont-init.d/021-code-review-gateway.sh
 
+# Profile skill for the Slack mobile-change loop: per-run PR body files and a
+# preview/confirm store gate. The boot hook copies it onto /data/.hermes when
+# the volume is mounted. It does not embed signing keys.
+COPY skills/mobile-change /opt/hermes/saga-skills/mobile-change
+COPY --chmod=0755 saga-patches/mobile-change-skill.sh /etc/cont-init.d/022-mobile-change-skill.sh
+
 ENV HERMES_HOME=/data/.hermes \
     HERMES_WRITE_SAFE_ROOT=/data/.hermes \
     HERMES_LAZY_INSTALL_TARGET=/data/.hermes/lazy-packages \
