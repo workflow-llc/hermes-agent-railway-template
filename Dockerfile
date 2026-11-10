@@ -1,17 +1,18 @@
-# `v0.22.7-desktop` is digest-pinned to the Hermes Agent v0.22.7 stable build with the
-# `HERMES_BOT_DESKTOP=1` image variant (upstream desktop variant of the v0.22.7 stable
-# release, published 2026-11-03). Rolled up from v0.22.5: v0.22.6 (~776 PRs, 3,448
-# commits) and v0.22.7 (~174 PRs) — patch releases on the v0.22.0 "Threshold Release"
-# line. The v0.22.5 baseline already carried the pluggable delegation backends
-# (`ctx.register_delegation_provider`) that the advanced-delegation plugin
-# (profile_routes / model_map) requires, so nothing in this window is a prerequisite.
-# Same Hermes code as `v0.22.7`, plus the Bot Desktop display stack that variant installs:
+# `v0.23.1-desktop` is digest-pinned to the Hermes Agent v0.23.1 stable build with the
+# `HERMES_BOT_DESKTOP=1` image variant (upstream desktop variant of the v0.23.1 stable
+# release, published 2026-11-09). This is the v0.23.0 "Hearth Release" line: ~10,080
+# commits / ~1,950 PRs since v0.22.0 (fully documented in the v0.23.0 notes) plus the
+# v0.23.1 patch window (~618 PRs), rolling up v0.22.1-v0.22.7. The headline change we
+# inherit is the single-gateway topology: one gateway owns every session, named-profile
+# s6 slots are registered DOWN by the boot reconciler, and the root slot folds their
+# autostart intent and multiplexes them (s6 is now a supported multiplex host).
+# Same Hermes code as `v0.23.1`, plus the Bot Desktop display stack that variant installs:
 # tigervnc-standalone-server, the Xfce components (panel/wm/desktop/settings/terminal),
 # dbus-x11, x11-utils/xkb, xauth and chromium (~233 MB). DEVS-1068 needs it because the
 # plain image ships no Xvnc, so `tools/bot_desktop/runtime.status()` reports the stack
 # missing and nothing can start. We pin the explicit version tag so a `stable` re-point
 # cannot move this service silently. amd64 manifest digest, verified via Docker Hub.
-FROM nousresearch/hermes-agent:v0.22.7-desktop@sha256:2393aaca1b7d53b5c04c1b98d5f2b126f763ba3440b0724f4af185415974096f
+FROM nousresearch/hermes-agent:v0.23.1-desktop@sha256:9c8bf5ea1738a666fad04fac094829e415b00e659b6763557420d204dcd6e39d
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/hermes-railway-entrypoint
 
